@@ -1,6 +1,8 @@
 "use client";
 // Nos customizados do construtor: TriggerNode (SE) e StepNode (ENTAO).
 // Edicao inline e propagada via callbacks guardados em node.data.
+// Classes nodrag/nowheel: evitam que interagir com os campos arraste o no
+// ou que a rolagem do mouse de zoom no canvas (ou incremente o input number).
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type {
   Condition,
@@ -49,6 +51,8 @@ const input: React.CSSProperties = {
   fontSize: 13,
 };
 const row: React.CSSProperties = { display: "flex", gap: 6, marginBottom: 6 };
+// Aplicado a todos os controles: nao arrastar o no ao interagir.
+const NODRAG = "nodrag nowheel";
 
 // ---- Trigger (SE) ----
 export function TriggerNode({ data }: NodeProps) {
@@ -62,12 +66,15 @@ export function TriggerNode({ data }: NodeProps) {
     );
     update({ conditions });
   };
+  const removeCond = (i: number) =>
+    update({ conditions: trigger.conditions.filter((_, idx) => idx !== i) });
 
   return (
-    <div style={{ ...box, borderColor: "#3483fa" }}>
+    <div className="nowheel" style={{ ...box, borderColor: "#3483fa" }}>
       <strong style={{ color: "#3483fa" }}>SE — Gatilho</strong>
       <div style={{ ...row, marginTop: 8 }}>
         <select
+          className={NODRAG}
           style={input}
           value={trigger.event}
           onChange={(e) => update({ event: e.target.value as Trigger["event"] })}
@@ -76,6 +83,7 @@ export function TriggerNode({ data }: NodeProps) {
           <option value="order_created">Pedido criado</option>
         </select>
         <select
+          className={NODRAG}
           style={{ ...input, width: 110 }}
           value={trigger.match}
           onChange={(e) => update({ match: e.target.value as Trigger["match"] })}
@@ -85,9 +93,16 @@ export function TriggerNode({ data }: NodeProps) {
         </select>
       </div>
 
+      {trigger.conditions.length === 0 && (
+        <p style={{ color: "#888", margin: "4px 0" }}>
+          Sem condições: aplica a todos os pedidos.
+        </p>
+      )}
+
       {trigger.conditions.map((c, i) => (
-        <div key={i} style={{ ...row, flexWrap: "wrap" }}>
+        <div key={i} style={{ ...row, flexWrap: "wrap", alignItems: "center" }}>
           <select
+            className={NODRAG}
             style={{ ...input, flex: 1 }}
             value={c.field}
             onChange={(e) => updateCond(i, { field: e.target.value as ConditionField })}
@@ -97,6 +112,7 @@ export function TriggerNode({ data }: NodeProps) {
             ))}
           </select>
           <select
+            className={NODRAG}
             style={{ ...input, width: 120 }}
             value={c.op}
             onChange={(e) => updateCond(i, { op: e.target.value as ConditionOp })}
@@ -106,15 +122,25 @@ export function TriggerNode({ data }: NodeProps) {
             ))}
           </select>
           <input
-            style={input}
+            className={NODRAG}
+            style={{ ...input, flex: 1 }}
             value={String(c.value)}
             placeholder="valor"
             onChange={(e) => updateCond(i, { value: e.target.value })}
           />
+          <button
+            className={NODRAG}
+            onClick={() => removeCond(i)}
+            title="Remover condição"
+            style={{ border: "none", background: "none", cursor: "pointer", color: "#c00", fontSize: 16 }}
+          >
+            ×
+          </button>
         </div>
       ))}
 
       <button
+        className={NODRAG}
         style={{ ...input, cursor: "pointer", background: "#f5f6f7" }}
         onClick={() =>
           update({
@@ -141,11 +167,12 @@ export function StepNode({ data }: NodeProps) {
   const update = (patch: Partial<Step>) => onChange({ ...step, ...patch });
 
   return (
-    <div style={{ ...box, borderColor: "#00a650" }}>
+    <div className="nowheel" style={{ ...box, borderColor: "#00a650" }}>
       <Handle type="target" position={Position.Top} />
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <strong style={{ color: "#00a650" }}>ENTAO — Acao</strong>
         <button
+          className={NODRAG}
           onClick={onRemove}
           style={{ border: "none", background: "none", cursor: "pointer", color: "#999" }}
         >
@@ -158,13 +185,17 @@ export function StepNode({ data }: NodeProps) {
         <input
           type="number"
           min={0}
+          className={NODRAG}
           style={{ ...input, width: 70 }}
           value={step.delay.value}
+          // Evita que a rolagem do mouse incremente o numero (bug em canvas).
+          onWheel={(e) => e.currentTarget.blur()}
           onChange={(e) =>
             update({ delay: { ...step.delay, value: Number(e.target.value) } })
           }
         />
         <select
+          className={NODRAG}
           style={{ ...input, width: 110 }}
           value={step.delay.unit}
           onChange={(e) =>
@@ -178,6 +209,7 @@ export function StepNode({ data }: NodeProps) {
       </div>
 
       <select
+        className={NODRAG}
         style={{ ...input, marginBottom: 6 }}
         value={step.action}
         onChange={(e) => update({ action: e.target.value as Step["action"] })}
@@ -190,6 +222,7 @@ export function StepNode({ data }: NodeProps) {
       </select>
 
       <input
+        className={NODRAG}
         style={input}
         placeholder="Prompt de IA (opcional) — gera o conteudo"
         value={step.aiPrompt ?? ""}
