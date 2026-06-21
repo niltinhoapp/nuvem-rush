@@ -3,16 +3,16 @@
 // assinado com o Client Secret do app.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+// Webhooks operacionais registrados via API na instalacao.
+// Os eventos LGPD (store/redact, customers/redact, customers/data_request)
+// sao configurados no painel de Parceiros, nao aqui.
 export const REQUIRED_WEBHOOK_EVENTS = [
   "order/created",
   "order/paid",
   "order/cancelled",
   "product/created",
   "product/updated",
-  // Obrigatorios para aprovacao / LGPD:
   "app/uninstalled",
-  "store/redact",
-  "customers/redact",
 ] as const;
 
 export function verifyHmac(rawBody: string, signature: string | null): boolean {

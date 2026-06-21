@@ -29,7 +29,19 @@ export async function POST(req: NextRequest) {
 
     case "store/redact":
     case "customers/redact":
+      // LGPD: registra a solicitacao de remocao para processamento.
       // TODO: remover/anonimizar dados pessoais conforme o payload.
+      await col(storeId, "lgpd_requests").add({
+        type: payload.event, payload, status: "pending", at: Date.now(),
+      });
+      break;
+
+    case "customers/data_request":
+      // LGPD: titular solicitou os dados que mantemos sobre ele.
+      // TODO: compilar e disponibilizar os dados do cliente referenciado.
+      await col(storeId, "lgpd_requests").add({
+        type: payload.event, payload, status: "pending", at: Date.now(),
+      });
       break;
 
     // ---- Pedidos -> motor de regras ----
