@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+*.log
+.DS_Store
+functions/lib/
+functions/node_modules/
+.firebase/
+
+# Chaves de servico do Firebase/GCP — NUNCA versionar
+*-firebase-adminsdk-*.json
+serviceAccount*.json
+
+# cache de build do TS
+*.tsbuildinfo
