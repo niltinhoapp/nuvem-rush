@@ -3,6 +3,6 @@
   "regions": ["gru1"],
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/cron/dispatch", "schedule": "* * * * *" }
+    { "path": "/api/cron/dispatch", "schedule": "0 12 * * *" }
   ]
 }
