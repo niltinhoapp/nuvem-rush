@@ -5,6 +5,11 @@ import { verifyHmac } from "@/lib/nuvemshop/webhooks";
 import { storeRef, col } from "@/lib/firebase/admin";
 import { handleOrderEvent } from "@/lib/rules/process";
 
+// Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
+export async function GET() {
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(req: NextRequest) {
   const raw = await req.text();
   const signature = req.headers.get("x-linkedstore-hmac-sha256");
