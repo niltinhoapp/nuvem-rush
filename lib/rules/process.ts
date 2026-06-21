@@ -1,8 +1,8 @@
 // Avalia os flows ativos da loja contra um pedido ja sincronizado,
-// cria enrollments e agenda os jobs (1 Cloud Task por step).
+// cria enrollments e agenda os jobs (coletados pelo cron da Vercel).
 import { col, storeRef } from "@/lib/firebase/admin";
 import { buildContext, matches } from "@/lib/rules/evaluate";
-import { scheduleDispatch, delayToMs } from "@/lib/scheduler";
+import { delayToMs } from "@/lib/time";
 import { syncOrder } from "@/lib/nuvemshop/sync";
 import type { Contact, Flow, Order, Store } from "@/types";
 
@@ -57,8 +57,9 @@ async function enrollInFlows(
       const step = flow.steps[i]!;
       const jobRef = col(storeId, "jobs").doc();
       const runAt = Date.now() + delayToMs(step.delay);
-      const taskName = await scheduleDispatch({ jobId: jobRef.id, storeId, delay: step.delay });
 
+      // Agendamento via Vercel Cron: persistimos o job com runAt e o cron
+      // (/api/cron/dispatch) o coleta quando vencer. Sem dependencia de GCP.
       await jobRef.set({
         jobId: jobRef.id,
         storeId,
@@ -68,7 +69,6 @@ async function enrollInFlows(
         channel: step.action,
         runAt,
         status: "scheduled",
-        cloudTaskName: taskName,
       });
     }
 

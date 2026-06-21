@@ -1,25 +1,18 @@
 // Agendamento de disparos futuros via Google Cloud Tasks.
 // Cria UMA task por step com scheduleTime = agora + delay.
 // No horario, o Cloud Tasks chama POST {APP_BASE_URL}/api/dispatch/{jobId}.
+// NAO USADO no runtime atual: o agendamento usa Vercel Cron (ver lib/dispatch.ts
+// e app/api/cron/dispatch). Este arquivo fica como base para migrar para Cloud
+// Tasks no futuro (precisao maior em escala). Nada o importa hoje.
 import { CloudTasksClient } from "@google-cloud/tasks";
 import type { DelayUnit } from "@/types";
+import { delayToMs } from "@/lib/time";
 
-// Init preguiçosa: nao instanciar no load do modulo (sem credenciais GCP,
-// derruba qualquer rota que importe este arquivo, ex.: o webhook).
+// Init preguiçosa: nunca instanciar no load do modulo.
 let _client: CloudTasksClient | null = null;
 function client(): CloudTasksClient {
   if (!_client) _client = new CloudTasksClient();
   return _client;
-}
-
-const MS: Record<DelayUnit, number> = {
-  minutes: 60_000,
-  hours: 3_600_000,
-  days: 86_400_000,
-};
-
-export function delayToMs(d: { value: number; unit: DelayUnit }): number {
-  return d.value * MS[d.unit];
 }
 
 export async function scheduleDispatch(params: {
