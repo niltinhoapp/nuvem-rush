@@ -4,7 +4,13 @@
 import { CloudTasksClient } from "@google-cloud/tasks";
 import type { DelayUnit } from "@/types";
 
-const client = new CloudTasksClient();
+// Init preguiçosa: nao instanciar no load do modulo (sem credenciais GCP,
+// derruba qualquer rota que importe este arquivo, ex.: o webhook).
+let _client: CloudTasksClient | null = null;
+function client(): CloudTasksClient {
+  if (!_client) _client = new CloudTasksClient();
+  return _client;
+}
 
 const MS: Record<DelayUnit, number> = {
   minutes: 60_000,
@@ -24,11 +30,11 @@ export async function scheduleDispatch(params: {
   const project = process.env.GCP_PROJECT_ID!;
   const location = process.env.GCP_LOCATION!;
   const queue = process.env.CLOUD_TASKS_QUEUE!;
-  const parent = client.queuePath(project, location, queue);
+  const parent = client().queuePath(project, location, queue);
 
   const runAtSeconds = Math.floor((Date.now() + delayToMs(params.delay)) / 1000);
 
-  const [response] = await client.createTask({
+  const [response] = await client().createTask({
     parent,
     task: {
       scheduleTime: { seconds: runAtSeconds },

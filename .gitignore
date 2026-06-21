@@ -15,3 +15,8 @@ serviceAccount*.json
 
 # cache de build do TS
 *.tsbuildinfo
+
+.vercel
+
+# Vercel
+.vercel
