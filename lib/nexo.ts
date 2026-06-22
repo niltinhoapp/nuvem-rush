@@ -17,10 +17,18 @@ export function getNexo() {
 }
 
 // Conecta ao admin e sinaliza que o app esta pronto para exibicao.
+// Robusto: sinaliza iAmReady mesmo se o connect demorar, para o admin nao
+// mostrar "nao foi possivel carregar" por timeout do handshake.
 export async function initNexo() {
   const n = getNexo();
-  await connect(n);
+  // Dispara o ready o quanto antes (o admin espera esse sinal).
   iAmReady(n);
+  try {
+    await connect(n);
+    iAmReady(n);
+  } catch (e) {
+    console.warn("Nexo connect falhou (seguindo mesmo assim):", e);
+  }
   return n;
 }
 
