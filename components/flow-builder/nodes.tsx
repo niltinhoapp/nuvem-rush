@@ -1,9 +1,22 @@
 "use client";
 // Nos customizados do construtor: TriggerNode (SE) e StepNode (ENTAO).
+// Estilizados com Nimbus DS para ficar consistente com o resto do app.
 // Edicao inline e propagada via callbacks guardados em node.data.
 // Classes nodrag/nowheel: evitam que interagir com os campos arraste o no
 // ou que a rolagem do mouse de zoom no canvas (ou incremente o input number).
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Box, Text, Input, Select, Button, IconButton, Icon } from "@nimbus-ds/components";
+import {
+  LightningBoltIcon,
+  TrashIcon,
+  PlusCircleIcon,
+  MailIcon,
+  WhatsappIcon,
+  TagIcon,
+  LinkIcon,
+  ChecklistIcon,
+  MagicWandIcon,
+} from "@nimbus-ds/icons";
 import type {
   Condition,
   ConditionField,
@@ -33,24 +46,22 @@ const OPS: { value: ConditionOp; label: string }[] = [
   { value: "lt", label: "menor que" },
 ];
 
-const box: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #d7d9dc",
-  borderRadius: 12,
-  padding: 16,
-  width: 320,
-  fontFamily: "system-ui",
-  fontSize: 13,
-  boxShadow: "0 1px 4px rgba(0,0,0,.08)",
+const ACTIONS: { value: Step["action"]; label: string }[] = [
+  { value: "email", label: "Enviar e-mail" },
+  { value: "whatsapp", label: "Enviar WhatsApp" },
+  { value: "tag", label: "Adicionar tag" },
+  { value: "webhook", label: "Acionar webhook" },
+  { value: "task", label: "Criar tarefa" },
+];
+
+const ACTION_ICON: Record<Step["action"], React.ReactNode> = {
+  email: <MailIcon size={18} />,
+  whatsapp: <WhatsappIcon size={18} />,
+  tag: <TagIcon size={18} />,
+  webhook: <LinkIcon size={18} />,
+  task: <ChecklistIcon size={18} />,
 };
-const input: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 8px",
-  border: "1px solid #d7d9dc",
-  borderRadius: 6,
-  fontSize: 13,
-};
-const row: React.CSSProperties = { display: "flex", gap: 6, marginBottom: 6 };
+
 // Aplicado a todos os controles: nao arrastar o no ao interagir.
 const NODRAG = "nodrag nowheel";
 
@@ -70,78 +81,100 @@ export function TriggerNode({ data }: NodeProps) {
     update({ conditions: trigger.conditions.filter((_, idx) => idx !== i) });
 
   return (
-    <div className="nowheel" style={{ ...box, borderColor: "#3483fa" }}>
-      <strong style={{ color: "#3483fa" }}>SE — Gatilho</strong>
-      <div style={{ ...row, marginTop: 8 }}>
-        <select
+    <Box
+      className="nowheel"
+      backgroundColor="neutral-background"
+      borderColor="primary-interactive"
+      borderWidth="2"
+      borderStyle="solid"
+      borderRadius="3"
+      boxShadow="2"
+      padding="4"
+      width="360px"
+      display="flex"
+      flexDirection="column"
+      gap="3"
+    >
+      <Box display="flex" alignItems="center" gap="2">
+        <Icon source={<LightningBoltIcon size={18} />} color="primary-interactive" />
+        <Text fontWeight="bold" color="primary-interactive">
+          SE — Gatilho
+        </Text>
+      </Box>
+
+      <Box display="flex" gap="2">
+        <Select
           className={NODRAG}
-          style={input}
+          name="trigger-event"
+          id="trigger-event"
           value={trigger.event}
           onChange={(e) => update({ event: e.target.value as Trigger["event"] })}
         >
-          <option value="order_paid">Pedido pago</option>
-          <option value="order_created">Pedido criado</option>
-        </select>
-        <select
+          <Select.Option value="order_paid" label="Pedido pago" />
+          <Select.Option value="order_created" label="Pedido criado" />
+        </Select>
+        <Select
           className={NODRAG}
-          style={{ ...input, width: 110 }}
+          name="trigger-match"
+          id="trigger-match"
           value={trigger.match}
           onChange={(e) => update({ match: e.target.value as Trigger["match"] })}
         >
-          <option value="all">todas</option>
-          <option value="any">qualquer</option>
-        </select>
-      </div>
+          <Select.Option value="all" label="todas as condições" />
+          <Select.Option value="any" label="qualquer condição" />
+        </Select>
+      </Box>
 
       {trigger.conditions.length === 0 && (
-        <p style={{ color: "#888", margin: "4px 0" }}>
+        <Text fontSize="caption" color="neutral-textLow">
           Sem condições: aplica a todos os pedidos.
-        </p>
+        </Text>
       )}
 
       {trigger.conditions.map((c, i) => (
-        <div key={i} style={{ ...row, flexWrap: "wrap", alignItems: "center" }}>
-          <select
+        <Box key={i} display="flex" flexWrap="wrap" alignItems="center" gap="1">
+          <Select
             className={NODRAG}
-            style={{ ...input, flex: 1 }}
+            name={`cond-field-${i}`}
+            id={`cond-field-${i}`}
             value={c.field}
             onChange={(e) => updateCond(i, { field: e.target.value as ConditionField })}
           >
             {FIELDS.map((f) => (
-              <option key={f.value} value={f.value}>{f.label}</option>
+              <Select.Option key={f.value} value={f.value} label={f.label} />
             ))}
-          </select>
-          <select
+          </Select>
+          <Select
             className={NODRAG}
-            style={{ ...input, width: 120 }}
+            name={`cond-op-${i}`}
+            id={`cond-op-${i}`}
             value={c.op}
             onChange={(e) => updateCond(i, { op: e.target.value as ConditionOp })}
           >
             {OPS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <Select.Option key={o.value} value={o.value} label={o.label} />
             ))}
-          </select>
-          <input
+          </Select>
+          <Input
             className={NODRAG}
-            style={{ ...input, flex: 1 }}
             value={String(c.value)}
             placeholder="valor"
             onChange={(e) => updateCond(i, { value: e.target.value })}
           />
-          <button
+          <IconButton
             className={NODRAG}
+            source={<TrashIcon size={16} />}
+            color="danger-textLow"
             onClick={() => removeCond(i)}
-            title="Remover condição"
-            style={{ border: "none", background: "none", cursor: "pointer", color: "#c00", fontSize: 16 }}
-          >
-            ×
-          </button>
-        </div>
+            aria-label="Remover condição"
+          />
+        </Box>
       ))}
 
-      <button
+      <Button
+        appearance="neutral"
+        size="small"
         className={NODRAG}
-        style={{ ...input, cursor: "pointer", background: "#f5f6f7" }}
         onClick={() =>
           update({
             conditions: [
@@ -151,10 +184,12 @@ export function TriggerNode({ data }: NodeProps) {
           })
         }
       >
-        + condicao
-      </button>
+        <Icon source={<PlusCircleIcon size={16} />} color="currentColor" />
+        Condição
+      </Button>
+
       <Handle type="source" position={Position.Bottom} />
-    </div>
+    </Box>
   );
 }
 
@@ -167,26 +202,47 @@ export function StepNode({ data }: NodeProps) {
   const update = (patch: Partial<Step>) => onChange({ ...step, ...patch });
 
   return (
-    <div className="nowheel" style={{ ...box, borderColor: "#00a650" }}>
+    <Box
+      className="nowheel"
+      backgroundColor="neutral-background"
+      borderColor="success-interactive"
+      borderWidth="2"
+      borderStyle="solid"
+      borderRadius="3"
+      boxShadow="2"
+      padding="4"
+      width="340px"
+      display="flex"
+      flexDirection="column"
+      gap="3"
+    >
       <Handle type="target" position={Position.Top} />
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <strong style={{ color: "#00a650" }}>ENTAO — Acao</strong>
-        <button
-          className={NODRAG}
-          onClick={onRemove}
-          style={{ border: "none", background: "none", cursor: "pointer", color: "#999" }}
-        >
-          remover
-        </button>
-      </div>
 
-      <div style={{ ...row, marginTop: 8 }}>
-        <span style={{ alignSelf: "center" }}>Apos</span>
-        <input
+      <Box display="flex" alignItems="center" justifyContent="space-between">
+        <Box display="flex" alignItems="center" gap="2">
+          <Icon source={ACTION_ICON[step.action]} color="success-interactive" />
+          <Text fontWeight="bold" color="success-interactive">
+            ENTÃO — Ação
+          </Text>
+        </Box>
+        <IconButton
+          className={NODRAG}
+          source={<TrashIcon size={16} />}
+          color="neutral-textLow"
+          onClick={onRemove}
+          aria-label="Remover ação"
+        />
+      </Box>
+
+      <Box display="flex" alignItems="center" gap="2">
+        <Text fontSize="caption" color="neutral-textLow">
+          Após
+        </Text>
+        <Input
           type="number"
           min={0}
           className={NODRAG}
-          style={{ ...input, width: 70 }}
+          width="70px"
           value={step.delay.value}
           // Evita que a rolagem do mouse incremente o numero (bug em canvas).
           onWheel={(e) => e.currentTarget.blur()}
@@ -194,41 +250,48 @@ export function StepNode({ data }: NodeProps) {
             update({ delay: { ...step.delay, value: Number(e.target.value) } })
           }
         />
-        <select
+        <Select
           className={NODRAG}
-          style={{ ...input, width: 110 }}
+          name="delay-unit"
+          id="delay-unit"
           value={step.delay.unit}
           onChange={(e) =>
             update({ delay: { ...step.delay, unit: e.target.value as Step["delay"]["unit"] } })
           }
         >
-          <option value="minutes">minutos</option>
-          <option value="hours">horas</option>
-          <option value="days">dias</option>
-        </select>
-      </div>
+          <Select.Option value="minutes" label="minutos" />
+          <Select.Option value="hours" label="horas" />
+          <Select.Option value="days" label="dias" />
+        </Select>
+      </Box>
 
-      <select
+      <Select
         className={NODRAG}
-        style={{ ...input, marginBottom: 6 }}
+        name="step-action"
+        id="step-action"
         value={step.action}
         onChange={(e) => update({ action: e.target.value as Step["action"] })}
       >
-        <option value="email">Enviar e-mail</option>
-        <option value="whatsapp">Enviar WhatsApp</option>
-        <option value="tag">Adicionar tag</option>
-        <option value="webhook">Acionar webhook</option>
-        <option value="task">Criar tarefa</option>
-      </select>
+        {ACTIONS.map((a) => (
+          <Select.Option key={a.value} value={a.value} label={a.label} />
+        ))}
+      </Select>
 
-      <input
-        className={NODRAG}
-        style={input}
-        placeholder="Prompt de IA (opcional) — gera o conteudo"
-        value={step.aiPrompt ?? ""}
-        onChange={(e) => update({ aiPrompt: e.target.value })}
-      />
-    </div>
+      <Box display="flex" flexDirection="column" gap="1">
+        <Box display="flex" alignItems="center" gap="1">
+          <Icon source={<MagicWandIcon size={14} />} color="ai-generative" />
+          <Text fontSize="caption" color="neutral-textLow">
+            Prompt de IA (opcional) — gera o conteúdo automaticamente
+          </Text>
+        </Box>
+        <Input
+          className={NODRAG}
+          placeholder="Ex.: agradeça a compra e sugira produtos relacionados"
+          value={step.aiPrompt ?? ""}
+          onChange={(e) => update({ aiPrompt: e.target.value })}
+        />
+      </Box>
+    </Box>
   );
 }
 

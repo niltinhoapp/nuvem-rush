@@ -12,6 +12,8 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Box, Input, Button, Text, Icon } from "@nimbus-ds/components";
+import { PlusCircleIcon, DisketteIcon, RocketIcon } from "@nimbus-ds/icons";
 import { nodeTypes } from "./nodes";
 import { flowToGraph, graphToFlow } from "@/lib/flows/serialize";
 import { sessionToken } from "@/lib/nexo";
@@ -130,24 +132,51 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "80vh" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: 8 }}>
-        <input
+    <Box display="flex" flexDirection="column" height="80vh" gap="3">
+      <Box
+        display="flex"
+        gap="2"
+        alignItems="center"
+        padding="3"
+        backgroundColor="neutral-background"
+        borderRadius="2"
+        borderColor="neutral-surfaceHighlight"
+        borderWidth="1"
+        borderStyle="solid"
+        boxShadow="1"
+      >
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          style={{ padding: "8px 10px", border: "1px solid #d7d9dc", borderRadius: 6, flex: 1 }}
+          placeholder="Nome do fluxo"
         />
-        <button onClick={addStep} style={btn("#f5f6f7", "#333")}>+ Acao</button>
-        <button disabled={saving} onClick={() => save("draft")} style={btn("#f5f6f7", "#333")}>
+        <Button appearance="neutral" onClick={addStep}>
+          <Icon source={<PlusCircleIcon size={16} />} color="currentColor" />
+          Ação
+        </Button>
+        <Button appearance="neutral" disabled={saving} onClick={() => save("draft")}>
+          <Icon source={<DisketteIcon size={16} />} color="currentColor" />
           Salvar rascunho
-        </button>
-        <button disabled={saving} onClick={() => save("active")} style={btn("#3483fa", "#fff")}>
+        </Button>
+        <Button appearance="primary" disabled={saving} onClick={() => save("active")}>
+          <Icon source={<RocketIcon size={16} />} color="currentColor" />
           Ativar fluxo
-        </button>
-        {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
-      </div>
+        </Button>
+        {msg && (
+          <Text fontSize="caption" color="neutral-textLow">
+            {msg}
+          </Text>
+        )}
+      </Box>
 
-      <div style={{ flex: 1, border: "1px solid #e0e0e0", borderRadius: 8 }}>
+      <Box
+        flex="1"
+        borderColor="neutral-surfaceHighlight"
+        borderWidth="1"
+        borderStyle="solid"
+        borderRadius="2"
+        overflow="hidden"
+      >
         <ReactFlow
           nodes={nodesWithHandlers}
           edges={edges}
@@ -159,17 +188,7 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
           <Background />
           <Controls />
         </ReactFlow>
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
-
-const btn = (bg: string, color: string): React.CSSProperties => ({
-  padding: "8px 14px",
-  background: bg,
-  color,
-  border: "none",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontSize: 13,
-});
