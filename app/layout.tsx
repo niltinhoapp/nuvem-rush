@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import "@nimbus-ds/styles/dist/styles.css";
+import "@nimbus-ds/styles/dist/index.css";
 
 export const metadata = {
   title: "Nuvem Rush — Automacoes Pos-venda",
