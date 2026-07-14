@@ -291,6 +291,11 @@ export function StepNode({ data }: NodeProps) {
           onChange={(e) => update({ aiPrompt: e.target.value })}
         />
       </Box>
+
+      {/* Conector de saída: permite encadear a próxima ação a esta.
+          Sem isto, a 2ª ação em diante (que se liga na anterior, não
+          direto no gatilho) fica sem ponto de origem para a linha. */}
+      <Handle type="source" position={Position.Bottom} />
     </Box>
   );
 }
