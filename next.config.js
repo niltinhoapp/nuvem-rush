@@ -15,8 +15,10 @@ const nextConfig = {
         "frame-ancestors https://*.tiendanube.com https://*.nuvemshop.com.br " +
         "https://*.lojavirtualnuvem.com.br https://*.mitiendanube.com;",
     };
-    // Cobre tanto /dashboard quanto /dashboard/...
+    // Cobre a raiz (Site do aplicativo cadastrado no Partners = URL do embed)
+    // e tanto /dashboard quanto /dashboard/...
     return [
+      { source: "/", headers: [csp] },
       { source: "/dashboard", headers: [csp] },
       { source: "/dashboard/:path*", headers: [csp] },
     ];
