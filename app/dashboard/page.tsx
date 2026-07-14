@@ -42,6 +42,9 @@ export default function DashboardPage() {
   const [connection, setConnection] = useState<ConnectionStatus>("loading");
   const [flows, setFlows] = useState<Flow[] | null>(null);
   const [flowsFailed, setFlowsFailed] = useState(false);
+  // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
+  // chamado durante o prerender/SSR da pagina (mesmo com "use client").
+  const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
 
   const loadFlows = () => {
     setFlows(null);
@@ -61,7 +64,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     initNexo()
-      .then(() => {
+      .then((instance) => {
+        setNexo(instance);
         setConnection("ready");
         loadFlows();
       })
@@ -72,37 +76,37 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
-    <ErrorBoundary nexo={getNexo()}>
-      <Box padding="6" display="flex" flexDirection="column" gap="6">
-        <PageHeader />
+  const content = (
+    <Box padding="6" display="flex" flexDirection="column" gap="6">
+      <PageHeader />
 
-        {connection === "loading" && <CenteredState icon={<Spinner size="large" />} title="Conectando ao admin..." />}
+      {connection === "loading" && <CenteredState icon={<Spinner size="large" />} title="Conectando ao admin..." />}
 
-        {connection === "error" && (
-          <ErrorState
-            description="Não foi possível conectar com o admin da Nuvemshop. Recarregue a página para tentar novamente."
-            onRetry={() => window.location.reload()}
-          />
-        )}
+      {connection === "error" && (
+        <ErrorState
+          description="Não foi possível conectar com o admin da Nuvemshop. Recarregue a página para tentar novamente."
+          onRetry={() => window.location.reload()}
+        />
+      )}
 
-        {connection === "ready" && flowsFailed && (
-          <ErrorState
-            description="Não foi possível carregar seus fluxos agora. Tente novamente em instantes."
-            onRetry={loadFlows}
-          />
-        )}
+      {connection === "ready" && flowsFailed && (
+        <ErrorState
+          description="Não foi possível carregar seus fluxos agora. Tente novamente em instantes."
+          onRetry={loadFlows}
+        />
+      )}
 
-        {connection === "ready" && !flowsFailed && flows === null && (
-          <CenteredState icon={<Spinner size="large" />} title="Carregando seus fluxos..." />
-        )}
+      {connection === "ready" && !flowsFailed && flows === null && (
+        <CenteredState icon={<Spinner size="large" />} title="Carregando seus fluxos..." />
+      )}
 
-        {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
+      {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
 
-        {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
-      </Box>
-    </ErrorBoundary>
+      {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
+    </Box>
   );
+
+  return nexo ? <ErrorBoundary nexo={nexo}>{content}</ErrorBoundary> : content;
 }
 
 function PageHeader() {
