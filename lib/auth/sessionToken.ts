@@ -38,8 +38,11 @@ export function verifySessionToken(token: string): SessionClaims | null {
   // Expiracao (exp em segundos).
   if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return null;
 
-  // O store_id pode vir como store_id ou sub, dependendo da versao.
-  const storeRaw = payload.store_id ?? payload.sub;
+  // Confirmado via inspecao de um token real (ver stores/_debug):
+  // o claim correto e "storeId" (camelCase). "sub" e outra coisa (parece
+  // ser o user_id do lojista logado, nao a loja) — NAO usar como id de loja.
+  // Mantemos store_id como fallback de compatibilidade, mas sub fica de fora.
+  const storeRaw = payload.storeId ?? payload.store_id;
   if (storeRaw == null) return null;
 
   return { storeId: String(storeRaw), raw: payload };

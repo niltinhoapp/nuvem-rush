@@ -3,28 +3,14 @@
 // de componente). O visual Nimbus refinado entra depois, com API verificada.
 "use client";
 import { useEffect, useState } from "react";
-import { initNexo, sessionToken } from "@/lib/nexo";
+import { initNexo } from "@/lib/nexo";
 
 export default function DashboardPage() {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     initNexo()
-      .then(async () => {
-        setStatus("ready");
-        // TEMPORARIO: captura o session token real pra debugar o mismatch
-        // de storeId (ver app/api/debug/session/route.ts). Remover depois.
-        try {
-          const token = await sessionToken();
-          await fetch("/api/debug/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token }),
-          });
-        } catch (e) {
-          console.warn("Debug session token falhou:", e);
-        }
-      })
+      .then(() => setStatus("ready"))
       .catch((e) => {
         console.error("Nexo falhou:", e);
         setStatus("error");
