@@ -1,50 +1,252 @@
 // Tela inicial do app incorporado (roda dentro do iframe do admin).
-// HTML puro para garantir renderizacao + handshake do Nexo (sem risco de API
-// de componente). O visual Nimbus refinado entra depois, com API verificada.
+// Construida com o Nimbus Design System, seguindo os templates de estado
+// vazio/inicial e de erro exigidos na homologacao da Nuvemshop:
+// https://dev.nuvemshop.com.br/docs/homologation/checklist
 "use client";
-import { useEffect, useState } from "react";
-import { initNexo } from "@/lib/nexo";
+import { useEffect, useState, type ReactNode } from "react";
+import { Box, Title, Text, Button, Card, Tag, Icon, Spinner } from "@nimbus-ds/components";
+import {
+  MailIcon,
+  WhatsappIcon,
+  LightningBoltIcon,
+  ExclamationTriangleIcon,
+  PlusCircleIcon,
+  EditIcon,
+} from "@nimbus-ds/icons";
+import { ErrorBoundary } from "@tiendanube/nexo";
+import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
+import type { Flow } from "@/types";
+
+type ConnectionStatus = "loading" | "ready" | "error";
+
+const STATUS_TAG: Record<Flow["status"], { label: string; appearance: "success" | "warning" | "neutral" }> = {
+  active: { label: "Ativo", appearance: "success" },
+  paused: { label: "Pausado", appearance: "warning" },
+  draft: { label: "Rascunho", appearance: "neutral" },
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  email: "E-mail",
+  whatsapp: "WhatsApp",
+  tag: "Tag",
+  webhook: "Webhook",
+  task: "Tarefa",
+};
+
+const TRIGGER_LABEL: Record<Flow["trigger"]["event"], string> = {
+  order_paid: "Pedido pago",
+  order_created: "Pedido criado",
+};
 
 export default function DashboardPage() {
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [connection, setConnection] = useState<ConnectionStatus>("loading");
+  const [flows, setFlows] = useState<Flow[] | null>(null);
+  const [flowsFailed, setFlowsFailed] = useState(false);
+
+  const loadFlows = () => {
+    setFlows(null);
+    setFlowsFailed(false);
+    sessionToken()
+      .then(async (token) => {
+        const r = await fetch("/api/flows", { headers: { Authorization: `Bearer ${token}` } });
+        if (!r.ok) throw new Error(`status ${r.status}`);
+        const data = await r.json();
+        setFlows(Array.isArray(data.flows) ? data.flows : []);
+      })
+      .catch((e) => {
+        console.error("Falha ao carregar fluxos:", e);
+        setFlowsFailed(true);
+      });
+  };
 
   useEffect(() => {
     initNexo()
-      .then(() => setStatus("ready"))
+      .then(() => {
+        setConnection("ready");
+        loadFlows();
+      })
       .catch((e) => {
         console.error("Nexo falhou:", e);
-        setStatus("error");
+        setConnection("error");
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: 24, maxWidth: 720 }}>
-      <h1 style={{ marginTop: 0 }}>Nuvem Rush</h1>
-      <p style={{ color: status === "ready" ? "#00a650" : "#666" }}>
-        {status === "ready"
-          ? "Conectado ao admin da Nuvemshop."
-          : status === "error"
-            ? "Rodando (sem conexao com o admin)."
-            : "Conectando ao admin..."}
-      </p>
+    <ErrorBoundary nexo={getNexo()}>
+      <Box padding="6" display="flex" flexDirection="column" gap="6">
+        <PageHeader />
 
-      <div style={{ border: "1px solid #e0e0e0", borderRadius: 12, padding: 20, marginTop: 16 }}>
-        <h2 style={{ marginTop: 0, fontSize: 18 }}>Seus fluxos de automação</h2>
-        <p style={{ color: "#444" }}>
-          Crie regras do tipo SE (produto / SKU / categoria / valor) ENTÃO
-          (e-mail / WhatsApp após X dias).
-        </p>
-        <a
-          href="/dashboard/flows/new"
-          style={{
-            display: "inline-block", marginTop: 8, padding: "10px 16px",
-            background: "#3483fa", color: "#fff", borderRadius: 8,
-            textDecoration: "none", fontWeight: 500,
-          }}
-        >
+        {connection === "loading" && <CenteredState icon={<Spinner size="large" />} title="Conectando ao admin..." />}
+
+        {connection === "error" && (
+          <ErrorState
+            description="Não foi possível conectar com o admin da Nuvemshop. Recarregue a página para tentar novamente."
+            onRetry={() => window.location.reload()}
+          />
+        )}
+
+        {connection === "ready" && flowsFailed && (
+          <ErrorState
+            description="Não foi possível carregar seus fluxos agora. Tente novamente em instantes."
+            onRetry={loadFlows}
+          />
+        )}
+
+        {connection === "ready" && !flowsFailed && flows === null && (
+          <CenteredState icon={<Spinner size="large" />} title="Carregando seus fluxos..." />
+        )}
+
+        {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
+
+        {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
+      </Box>
+    </ErrorBoundary>
+  );
+}
+
+function PageHeader() {
+  return (
+    <Box display="flex" alignItems="center" gap="3">
+      <Box
+        display="flex"
+        alignItems="center"
+        justifyContent="center"
+        backgroundColor="primary-surface"
+        borderRadius="2"
+        width="48px"
+        height="48px"
+      >
+        <Icon source={<LightningBoltIcon size={24} />} color="primary-interactive" />
+      </Box>
+      <Box display="flex" flexDirection="column">
+        <Title as="h1" fontSize="5">
+          Nuvem Rush
+        </Title>
+        <Text color="neutral-textLow">Automações de e-mail e WhatsApp para o pós-venda</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function CenteredState({ icon, title }: { icon: ReactNode; title: string }) {
+  return (
+    <Box
+      display="flex"
+      flexDirection="column"
+      alignItems="center"
+      justifyContent="center"
+      gap="4"
+      padding="10"
+    >
+      {icon}
+      <Text color="neutral-textLow">{title}</Text>
+    </Box>
+  );
+}
+
+// Template "Error Page" (obrigatorio na homologacao): explica o problema,
+// oferece um botao para tentar novamente e deixa claro que o erro e do app.
+function ErrorState({ description, onRetry }: { description: string; onRetry: () => void }) {
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" flexDirection="column" alignItems="center" gap="4" padding="6" textAlign="center">
+          <Icon source={<ExclamationTriangleIcon size={32} />} color="danger-textLow" />
+          <Box display="flex" flexDirection="column" gap="1">
+            <Title as="h3" fontSize="3">
+              Ocorreu um erro
+            </Title>
+            <Text color="neutral-textLow">{description}</Text>
+          </Box>
+          <Button appearance="primary" onClick={onRetry}>
+            Tentar novamente
+          </Button>
+        </Box>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// Template "Empty/Initial State" (obrigatorio na homologacao): usado quando
+// a loja ainda nao configurou nenhum fluxo.
+function EmptyState() {
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" flexDirection="column" alignItems="center" gap="4" padding="8" textAlign="center">
+          <Box display="flex" gap="2">
+            <Icon source={<MailIcon size={28} />} color="primary-interactive" />
+            <Icon source={<WhatsappIcon size={28} />} color="success-interactive" />
+          </Box>
+          <Box display="flex" flexDirection="column" gap="1" maxWidth="440px">
+            <Title as="h2" fontSize="4">
+              Crie sua primeira automação
+            </Title>
+            <Text color="neutral-textLow">
+              Monte regras do tipo SE (produto, SKU, categoria, marca ou valor) ENTÃO envie um e-mail ou
+              WhatsApp automático depois de X dias. Ideal para pós-venda, recompra e avaliações.
+            </Text>
+          </Box>
+          <Button appearance="primary" as="a" href="/dashboard/flows/new">
+            <Icon source={<PlusCircleIcon size={16} />} color="currentColor" />
+            Criar novo fluxo
+          </Button>
+        </Box>
+      </Card.Body>
+    </Card>
+  );
+}
+
+function FlowsList({ flows }: { flows: Flow[] }) {
+  return (
+    <Box display="flex" flexDirection="column" gap="4">
+      <Box display="flex" justifyContent="space-between" alignItems="center">
+        <Title as="h2" fontSize="3">
+          Seus fluxos ({flows.length})
+        </Title>
+        <Button appearance="primary" as="a" href="/dashboard/flows/new">
+          <Icon source={<PlusCircleIcon size={16} />} color="currentColor" />
           Criar novo fluxo
-        </a>
-      </div>
-    </main>
+        </Button>
+      </Box>
+
+      <Box display="flex" flexDirection="column" gap="2">
+        {flows.map((flow) => (
+          <FlowRow key={flow.flowId} flow={flow} />
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function FlowRow({ flow }: { flow: Flow }) {
+  const statusTag = STATUS_TAG[flow.status] ?? STATUS_TAG.draft;
+  const actions = Array.from(new Set(flow.steps.map((s) => ACTION_LABEL[s.action] ?? s.action)));
+
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" flexDirection="column" gap="1">
+            <Box display="flex" alignItems="center" gap="2">
+              <Text fontWeight="bold">{flow.name}</Text>
+              <Tag appearance={statusTag.appearance}>{statusTag.label}</Tag>
+            </Box>
+            <Text fontSize="caption" color="neutral-textLow">
+              SE {TRIGGER_LABEL[flow.trigger.event] ?? flow.trigger.event}
+              {actions.length > 0 ? ` · ENTÃO ${actions.join(", ")}` : ""}
+            </Text>
+            <Text fontSize="caption" color="neutral-textLow">
+              {flow.stats.enrolled} contatos inscritos · {flow.stats.sent} mensagens enviadas
+            </Text>
+          </Box>
+          <Button as="a" href={`/dashboard/flows/${flow.flowId}`}>
+            <Icon source={<EditIcon size={16} />} color="currentColor" />
+            Editar
+          </Button>
+        </Box>
+      </Card.Body>
+    </Card>
   );
 }
