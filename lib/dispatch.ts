@@ -2,6 +2,7 @@
 // Reutilizada pelo cron da Vercel e pelo endpoint /api/dispatch.
 import { col, storeRef } from "@/lib/firebase/admin";
 import { sendEmail } from "@/lib/channels/email";
+import { sendWhatsapp } from "@/lib/channels/whatsapp";
 import type { Job, Flow, Store } from "@/types";
 
 export type DispatchResult =
@@ -40,8 +41,10 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   try {
     if (step.action === "email") {
       await sendEmail({ storeId, enrollmentId: job.enrollmentId, step });
+    } else if (step.action === "whatsapp") {
+      await sendWhatsapp({ storeId, enrollmentId: job.enrollmentId, step });
     }
-    // TODO: whatsapp, tag, webhook, task.
+    // TODO: tag, webhook, task.
 
     await jobRef.update({ status: "sent" });
     await storeRef(storeId).update({

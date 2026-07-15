@@ -33,3 +33,30 @@ export async function generateEmailContent(
 
   return JSON.parse(completion.choices[0]?.message.content ?? "{}");
 }
+
+// Gera o texto de UMA variavel de corpo de template do WhatsApp (texto puro,
+// sem HTML/markdown, curto o bastante para caber numa mensagem de WhatsApp).
+export async function generateWhatsappContent(
+  prompt: string,
+  context: Record<string, unknown>,
+): Promise<string> {
+  const completion = await client().chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Voce e um copywriter de pos-venda para e-commerce escrevendo uma " +
+          "mensagem curta de WhatsApp (texto puro, sem markdown, sem HTML, " +
+          "no maximo 2-3 frases). Responda APENAS com o texto da mensagem, " +
+          "em PT-BR, tom amigavel.",
+      },
+      {
+        role: "user",
+        content: `Contexto: ${JSON.stringify(context)}\nObjetivo da mensagem: ${prompt}`,
+      },
+    ],
+  });
+
+  return (completion.choices[0]?.message.content ?? "").trim();
+}
