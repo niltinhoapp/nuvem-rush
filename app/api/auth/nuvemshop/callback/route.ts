@@ -5,6 +5,7 @@ import { exchangeCodeForToken } from "@/lib/nuvemshop/oauth";
 import { NuvemshopClient } from "@/lib/nuvemshop/client";
 import { REQUIRED_WEBHOOK_EVENTS } from "@/lib/nuvemshop/webhooks";
 import { storeRef } from "@/lib/firebase/admin";
+import { PLANS } from "@/lib/plans";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -22,13 +23,16 @@ export async function GET(req: NextRequest) {
         storeId,
         accessToken: token.access_token,
         scope: token.scope,
-        plan: "free",
+        // Toda instalacao comeca no Essencial (teste gratis de 14 dias).
+        plan: "essencial",
         status: "active",
         installedAt: Date.now(),
         quotas: {
-          contactsLimit: 250,
-          dispatchesMonthLimit: 500,
+          contactsLimit: PLANS.essencial.contactsLimit,
+          dispatchesMonthLimit: PLANS.essencial.emailsMonthLimit,
           dispatchesMonthUsed: 0,
+          whatsappMonthLimit: PLANS.essencial.whatsappMonthLimit,
+          whatsappMonthUsed: 0,
         },
       },
       { merge: true },

@@ -23,12 +23,11 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "cancelled", reason: "enrollment inativo" };
   }
 
-  // Loja ativa e dentro da quota?
+  // Loja ativa?
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
-  if (!store || store.status !== "active" ||
-      store.quotas.dispatchesMonthUsed >= store.quotas.dispatchesMonthLimit) {
+  if (!store || store.status !== "active") {
     await jobRef.update({ status: "cancelled" });
-    return { ok: true, status: "cancelled", reason: "quota ou loja inativa" };
+    return { ok: true, status: "cancelled", reason: "loja inativa" };
   }
 
   const flow = (await col(storeId, "flows").doc(job.flowId).get()).data() as Flow | undefined;
@@ -36,6 +35,20 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   if (!step) {
     await jobRef.update({ status: "cancelled" });
     return { ok: true, status: "cancelled", reason: "step inexistente" };
+  }
+
+  // Quota por canal: WhatsApp tem cota propria (cada msg custa ~R$0,33 na
+  // Meta); e-mail usa a cota legada "dispatches".
+  const isWhatsapp = step.action === "whatsapp";
+  const quotaUsed = isWhatsapp
+    ? (store.quotas.whatsappMonthUsed ?? 0)
+    : store.quotas.dispatchesMonthUsed;
+  const quotaLimit = isWhatsapp
+    ? (store.quotas.whatsappMonthLimit ?? 0)
+    : store.quotas.dispatchesMonthLimit;
+  if (quotaUsed >= quotaLimit) {
+    await jobRef.update({ status: "cancelled" });
+    return { ok: true, status: "cancelled", reason: "quota do canal esgotada" };
   }
 
   try {
@@ -47,9 +60,11 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     // TODO: tag, webhook, task.
 
     await jobRef.update({ status: "sent" });
-    await storeRef(storeId).update({
-      "quotas.dispatchesMonthUsed": store.quotas.dispatchesMonthUsed + 1,
-    });
+    await storeRef(storeId).update(
+      isWhatsapp
+        ? { "quotas.whatsappMonthUsed": (store.quotas.whatsappMonthUsed ?? 0) + 1 }
+        : { "quotas.dispatchesMonthUsed": store.quotas.dispatchesMonthUsed + 1 },
+    );
     await col(storeId, "logs").add({
       jobId, channel: step.action, status: "sent", at: Date.now(),
     });

@@ -1,6 +1,6 @@
 // Tipos centrais do dominio. Espelham as colecoes do Firestore.
 
-export type Plan = "free" | "pro" | "agency";
+export type Plan = "essencial" | "crescimento" | "turbo";
 
 export interface Store {
   storeId: string; // = user_id retornado pela Nuvemshop
@@ -12,8 +12,13 @@ export interface Store {
   installedAt: number;
   quotas: {
     contactsLimit: number;
+    // Cota de E-MAIL (nome legado "dispatches" mantido p/ compatibilidade
+    // com documentos ja existentes no Firestore).
     dispatchesMonthLimit: number;
     dispatchesMonthUsed: number;
+    // Cota de WHATSAPP — separada porque cada mensagem custa ~R$0,33 na Meta.
+    whatsappMonthLimit: number;
+    whatsappMonthUsed: number;
   };
 }
 
