@@ -37,6 +37,9 @@ export interface StoreWhatsapp {
   templateName?: string;
   templateLang?: string;
   connectedAt: number;
+  // O token da config do Embedded Signup expira em 60 dias; o cron
+  // /api/cron/refresh-whatsapp-tokens renova mensalmente via fb_exchange_token.
+  tokenRefreshedAt?: number;
 }
 
 export interface Product {

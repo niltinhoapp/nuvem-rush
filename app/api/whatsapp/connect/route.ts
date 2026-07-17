@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
         ? { templateName: DEFAULT_TEMPLATE_NAME, templateLang: DEFAULT_TEMPLATE_LANG }
         : {}),
       connectedAt: Date.now(),
+      tokenRefreshedAt: Date.now(),
     };
     await storeRef(storeId).update({ whatsapp });
 

@@ -49,6 +49,25 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   return token;
 }
 
+// Renova um business token antes de ele expirar (a config do Embedded Signup
+// emite tokens com validade de 60 dias). A troca fb_exchange_token devolve um
+// token NOVO com mais 60 dias; o antigo continua valido ate expirar.
+export async function refreshBusinessToken(currentToken: string): Promise<string> {
+  const appId = process.env.NEXT_PUBLIC_META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    throw new Error("NEXT_PUBLIC_META_APP_ID / META_APP_SECRET ausentes");
+  }
+  const url =
+    `${GRAPH}/oauth/access_token?grant_type=fb_exchange_token` +
+    `&client_id=${appId}&client_secret=${appSecret}` +
+    `&fb_exchange_token=${encodeURIComponent(currentToken)}`;
+  const body = await graphJson(await fetch(url));
+  const token = body.access_token as string | undefined;
+  if (!token) throw new Error("Graph nao retornou access_token na renovacao");
+  return token;
+}
+
 // Inscreve o NOSSO app na WABA do lojista — obrigatorio para recebermos os
 // webhooks (status de entrega, aprovacao de template) da conta dele.
 export async function subscribeAppToWaba(

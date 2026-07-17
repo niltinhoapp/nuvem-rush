@@ -29,9 +29,9 @@ Nuvem Rush. O código já está pronto; o que falta é liberação da Meta.
    - **Configuration ID: 1561577032141885**
    - Token: usuário do sistema, expira em **60 dias** (único formato que o
      modelo oferece; a criação manual não lista WhatsApp como ativo).
-     → TODO no código: renovar o token da loja via
-     `GET /oauth/access_token?grant_type=fb_exchange_token` antes de expirar
-     (cron mensal já resolve).
+     → ✅ resolvido no código: o cron diário
+     `/api/cron/refresh-whatsapp-tokens` (vercel.json, 07:30 UTC) renova via
+     `fb_exchange_token` todo token com mais de 30 dias.
    - Tarefas concedidas na WABA do lojista: manage, develop,
      manage_templates, manage_phone_assets, view_templates, view_phone_assets.
 4. **App Review (Acesso Avançado)** para as permissões:
