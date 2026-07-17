@@ -13,22 +13,43 @@
 // ele nao aceita parametros, entao nao usa o aiPrompt. Para producao de
 // verdade, crie e aprove um template proprio no WhatsApp Manager e configure
 // whatsappTemplateName/whatsappTemplateLang no step.
-import { col } from "@/lib/firebase/admin";
+import { col, storeRef } from "@/lib/firebase/admin";
 import { generateWhatsappContent } from "@/lib/ai/openai";
-import type { Step } from "@/types";
+import type { Step, Store } from "@/types";
 
 const GRAPH_VERSION = "v22.0";
 
-function phoneNumberId(): string {
-  const id = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  if (!id) throw new Error("WHATSAPP_PHONE_NUMBER_ID nao configurada");
-  return id;
+interface WaCredentials {
+  phoneNumberId: string;
+  accessToken: string;
+  // Template padrao da conta (usado quando o step nao define um).
+  defaultTemplateName?: string;
+  defaultTemplateLang?: string;
 }
 
-function accessToken(): string {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) throw new Error("WHATSAPP_ACCESS_TOKEN nao configurado");
-  return token;
+// Credenciais POR LOJA (Embedded Signup / Tech Provider): se o lojista
+// conectou a propria conta, usamos o numero e o token DELE — a Meta cobra
+// direto do lojista. Fallback: numero global do Nuvem Rush (env vars).
+async function resolveCredentials(storeId: string): Promise<WaCredentials> {
+  const store = (await storeRef(storeId).get()).data() as Store | undefined;
+  const wa = store?.whatsapp;
+  if (wa?.status === "connected" && wa.phoneNumberId && wa.accessToken) {
+    return {
+      phoneNumberId: wa.phoneNumberId,
+      accessToken: wa.accessToken,
+      defaultTemplateName: wa.templateName,
+      defaultTemplateLang: wa.templateLang,
+    };
+  }
+
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!phoneNumberId || !accessToken) {
+    throw new Error(
+      "loja sem WhatsApp conectado e sem credenciais globais configuradas",
+    );
+  }
+  return { phoneNumberId, accessToken };
 }
 
 // Normaliza para o formato esperado pela Graph API (digitos, com DDI).
@@ -46,6 +67,8 @@ export async function sendWhatsapp(params: {
 }): Promise<void> {
   const { storeId, enrollmentId, step } = params;
 
+  const creds = await resolveCredentials(storeId);
+
   const enroll = (await col(storeId, "enrollments").doc(enrollmentId).get()).data()!;
   const contact = (await col(storeId, "contacts").doc(enroll.contactId).get()).data()!;
   if (!contact.phone) throw new Error("contato sem telefone");
@@ -56,8 +79,14 @@ export async function sendWhatsapp(params: {
     whatsappTemplateParams?: string[];
   };
 
-  const templateName = config.whatsappTemplateName ?? "hello_world";
-  const languageCode = config.whatsappTemplateLang ?? "en_US";
+  // Prioridade: template do step > template padrao da conta conectada >
+  // hello_world (so para validar envio em teste).
+  const templateName =
+    config.whatsappTemplateName ?? creds.defaultTemplateName ?? "hello_world";
+  const languageCode =
+    config.whatsappTemplateLang ??
+    (config.whatsappTemplateName ? "pt_BR" : creds.defaultTemplateLang) ??
+    "en_US";
 
   let bodyParams = config.whatsappTemplateParams ?? [];
   if (bodyParams.length === 0 && step.aiPrompt && templateName !== "hello_world") {
@@ -71,11 +100,11 @@ export async function sendWhatsapp(params: {
       : undefined;
 
   const res = await fetch(
-    `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId()}/messages`,
+    `https://graph.facebook.com/${GRAPH_VERSION}/${creds.phoneNumberId}/messages`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken()}`,
+        Authorization: `Bearer ${creds.accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

@@ -20,6 +20,23 @@ export interface Store {
     whatsappMonthLimit: number;
     whatsappMonthUsed: number;
   };
+  // Conta de WhatsApp PROPRIA do lojista, conectada via Embedded Signup
+  // (modelo Tech Provider: a Meta cobra as mensagens direto do lojista).
+  // Se ausente/disconnected, o canal cai no numero global do Nuvem Rush.
+  whatsapp?: StoreWhatsapp;
+}
+
+export interface StoreWhatsapp {
+  wabaId: string;
+  phoneNumberId: string;
+  // Business token do lojista (troca do code do Embedded Signup).
+  // TODO: criptografar em repouso (KMS), como o accessToken da Nuvemshop.
+  accessToken: string;
+  status: "connected" | "disconnected";
+  // Template padrao de pos-venda criado automaticamente na WABA do lojista.
+  templateName?: string;
+  templateLang?: string;
+  connectedAt: number;
 }
 
 export interface Product {
