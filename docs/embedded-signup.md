@@ -20,22 +20,34 @@ Nuvem Rush. O código já está pronto; o que falta é liberação da Meta.
 
 1. **Resolver o bloqueio 2494160** (em andamento: caso 36962071840104512 +
    fórum). Sem isso nem a nossa conta cria template.
-2. **Virar Provedor de Tecnologia**: painel do app → fluxo "Torne-se um
-   Provedor de Tecnologia". Etapa 1 (verificação da empresa) ✅ concluída;
-   falta a etapa 2 (análise do app).
-3. **App Review (Acesso Avançado)** para as permissões:
+2. ✅ **Virar Provedor de Tecnologia** — confirmado em 17/07/2026 (decisão
+   irreversível aceita no painel). Novo checklist do painel: Login do
+   Facebook para Empresas ✅ / requisitos de teste / verificação da empresa
+   e do acesso / análise do app.
+3. ✅ **Configuration do Embedded Signup criada** (17/07/2026, a partir do
+   modelo "Cadastro incorporado do WhatsApp"):
+   - **Configuration ID: 1561577032141885**
+   - Token: usuário do sistema, expira em **60 dias** (único formato que o
+     modelo oferece; a criação manual não lista WhatsApp como ativo).
+     → TODO no código: renovar o token da loja via
+     `GET /oauth/access_token?grant_type=fb_exchange_token` antes de expirar
+     (cron mensal já resolve).
+   - Tarefas concedidas na WABA do lojista: manage, develop,
+     manage_templates, manage_phone_assets, view_templates, view_phone_assets.
+4. **App Review (Acesso Avançado)** para as permissões:
    - `whatsapp_business_management`
    - `whatsapp_business_messaging`
    - (`business_management` se o painel exigir)
    É preciso mostrar o app funcionando (screencast do fluxo de conexão —
    a página /connect-whatsapp serve pra isso).
-4. **Criar a Configuration do Embedded Signup**: painel do app → Login do
-   Facebook para Empresas → Configurações → criar configuração do tipo
-   "Cadastro incorporado do WhatsApp" → copiar o **Configuration ID**.
-5. **Publicar o app** (modo Ativo/Live).
-6. **Env vars no Vercel**: `META_APP_SECRET` (painel → Configurações →
-   Básico → Chave Secreta do App) e `NEXT_PUBLIC_WHATSAPP_ES_CONFIG_ID`
-   (passo 4). `NEXT_PUBLIC_META_APP_ID` já é conhecido (908269564938670).
+5. 🕐 **Verificação de acesso** — formulário ENVIADO em 17/07/2026 (status
+   "Em análise"; Meta responde em até 5 dias). Respostas: Plataforma de SaaS;
+   descrição do serviço de pós-venda; não gerencia portfólios de terceiros;
+   site https://nuvem-rush.vercel.app.
+6. **Publicar o app** (modo Ativo/Live).
+7. **Env vars no Vercel**: `META_APP_SECRET` (painel → Configurações →
+   Básico → Chave Secreta do App), `NEXT_PUBLIC_META_APP_ID=908269564938670`
+   e `NEXT_PUBLIC_WHATSAPP_ES_CONFIG_ID=1561577032141885`.
 7. **Testar**: abrir /connect-whatsapp com uma conta de teste, conectar um
    número, conferir `Store.whatsapp` no Firestore e o template criado na
    WABA de teste.
