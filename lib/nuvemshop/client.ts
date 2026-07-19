@@ -33,7 +33,10 @@ export class NuvemshopClient {
   }
 
   getOrder(orderId: string) {
-    return this.request<NsOrder>(`orders/${orderId}`);
+    // Inclui o aggregate de fulfillment_orders (rastreio do modelo novo).
+    // Se faltar o escopo read_fulfillment_orders, o pedido volta 200 sem o
+    // aggregate (degrada sem quebrar) — o rastreio manual ainda e lido.
+    return this.request<NsOrder>(`orders/${orderId}?aggregates=fulfillment_orders`);
   }
 
   getProduct(productId: string) {

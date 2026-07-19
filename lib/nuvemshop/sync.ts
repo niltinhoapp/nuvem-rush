@@ -2,7 +2,7 @@
 // Enriquece cada item do pedido com categoria/marca (buscadas do produto, com cache).
 import { col } from "@/lib/firebase/admin";
 import { NuvemshopClient } from "./client";
-import type { LocalizedString, NsOrder, NsProduct } from "./types";
+import type { LocalizedString, NsOrder, NsProduct, NsTrackingInfo } from "./types";
 import type { Contact, Order, OrderItem, Product } from "@/types";
 
 function loc(value: LocalizedString | undefined): string {
@@ -85,9 +85,20 @@ function extractTracking(raw: NsOrder): {
   url: string | null;
   shippingStatus: string | null;
 } {
-  const fulfillment = (raw.fulfillments ?? []).find((f) => f.tracking_info?.code || f.tracking_info?.url);
-  const code = raw.shipping_tracking_number ?? fulfillment?.tracking_info?.code ?? null;
-  const url = raw.shipping_tracking_url ?? fulfillment?.tracking_info?.url ?? null;
+  // Modelo novo (Nuvem Envio): rastreio no aggregate fulfillment_orders.
+  const fo = (raw.fulfillment_orders ?? []).find((f) => f.tracking_info?.code || f.tracking_info?.url);
+  // Modelo antigo: objeto inline em fulfillments.
+  const inline = (raw.fulfillments ?? []).find(
+    (f): f is { tracking_info: NsTrackingInfo } =>
+      typeof f === "object" && f !== null && "tracking_info" in f &&
+      Boolean((f as { tracking_info?: NsTrackingInfo }).tracking_info?.code ||
+        (f as { tracking_info?: NsTrackingInfo }).tracking_info?.url),
+  );
+
+  const code =
+    raw.shipping_tracking_number ?? fo?.tracking_info?.code ?? inline?.tracking_info?.code ?? null;
+  const url =
+    raw.shipping_tracking_url ?? fo?.tracking_info?.url ?? inline?.tracking_info?.url ?? null;
   return { code, url, shippingStatus: raw.shipping_status ?? null };
 }
 

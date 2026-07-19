@@ -18,8 +18,21 @@ export interface NsOrderProduct {
   quantity?: string | number;
 }
 
+export interface NsTrackingInfo {
+  code?: string | null;
+  url?: string | null;
+}
+
 export interface NsFulfillment {
-  tracking_info?: { code?: string | null; url?: string | null } | null;
+  tracking_info?: NsTrackingInfo | null;
+}
+
+// Modelo novo (Nuvem Envio): rastreio vem no aggregate fulfillment_orders,
+// que exige o escopo read_fulfillment_orders.
+export interface NsFulfillmentOrder {
+  id?: string;
+  status?: string | null;
+  tracking_info?: NsTrackingInfo | null;
 }
 
 export interface NsOrder {
@@ -35,7 +48,10 @@ export interface NsOrder {
   shipping_status?: string | null;
   shipping_tracking_number?: string | null;
   shipping_tracking_url?: string | null;
-  fulfillments?: NsFulfillment[];
+  // Pode vir como IDs (string, modelo novo) ou objetos (modelo antigo).
+  fulfillments?: (NsFulfillment | string)[];
+  // Preenchido quando pedido com ?aggregates=fulfillment_orders e escopo ok.
+  fulfillment_orders?: NsFulfillmentOrder[];
 }
 
 export interface NsCategoryRef {
