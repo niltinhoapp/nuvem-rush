@@ -2,7 +2,7 @@
 // Base: https://api.tiendanube.com/v1/{storeId}/...
 // Headers obrigatorios: Authentication: bearer <token> e User-Agent.
 
-import type { NsOrder, NsProduct } from "./types";
+import type { NsOrder, NsProduct, NsCheckout } from "./types";
 
 const API_BASE = "https://api.tiendanube.com/v1";
 
@@ -45,6 +45,13 @@ export class NuvemshopClient {
 
   listCategories() {
     return this.request<unknown[]>("categories");
+  }
+
+  // Carrinhos abandonados criados a partir de `since` (ISO 8601), mais recentes.
+  listCheckouts(sinceISO?: string, perPage = 50) {
+    const q = new URLSearchParams({ per_page: String(perPage), sort_by: "created-at-descending" });
+    if (sinceISO) q.set("created_at_min", sinceISO);
+    return this.request<NsCheckout[]>(`checkouts?${q.toString()}`);
   }
 
   // Registra um webhook para um evento (ex.: "order/paid").

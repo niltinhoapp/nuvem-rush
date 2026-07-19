@@ -88,6 +88,19 @@ export interface Order {
   trackingUrl?: string | null;
 }
 
+// Carrinho abandonado (Abandoned Checkout da Nuvemshop, obtido por poll).
+export interface Cart {
+  cartId: string;          // = id do checkout na Nuvemshop
+  nsCheckoutId: string;
+  contactId: string;
+  total: number;
+  items: OrderItem[];
+  recoveryUrl: string | null; // abandoned_checkout_url (link de volta ao carrinho)
+  createdAt: number;       // quando o checkout comecou
+  abandonedAt: number;     // quando detectamos como abandonado
+  status: "abandoned" | "recovered";
+}
+
 // ---- Motor de regras ----
 export type ConditionOp =
   | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "contains";
@@ -108,7 +121,7 @@ export interface Condition {
 }
 
 export interface Trigger {
-  event: "order_paid" | "order_created" | "order_fulfilled";
+  event: "order_paid" | "order_created" | "order_fulfilled" | "cart_abandoned";
   match: "all" | "any";
   conditions: Condition[];
 }
@@ -138,7 +151,8 @@ export interface Enrollment {
   enrollmentId: string;
   flowId: string;
   contactId: string;
-  orderId: string;
+  orderId?: string;   // origem: pedido (pos-venda) ...
+  cartId?: string;    // ... ou carrinho abandonado
   currentStep: number;
   status: "active" | "completed" | "cancelled";
   startedAt: number;

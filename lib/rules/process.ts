@@ -4,7 +4,45 @@ import { col, storeRef } from "@/lib/firebase/admin";
 import { buildContext, matches } from "@/lib/rules/evaluate";
 import { delayToMs } from "@/lib/time";
 import { syncOrder } from "@/lib/nuvemshop/sync";
-import type { Contact, Flow, Order, Store } from "@/types";
+import type { Cart, Contact, Flow, Order, Store } from "@/types";
+
+// Cria o enrollment e agenda os jobs de um flow que casou.
+// `origin` liga o enrollment ao pedido ou ao carrinho de origem.
+async function createEnrollmentWithJobs(
+  storeId: string,
+  flow: Flow,
+  contactId: string,
+  origin: { orderId?: string; cartId?: string },
+  flowDocRef: FirebaseFirestore.DocumentReference,
+): Promise<void> {
+  const enrollRef = col(storeId, "enrollments").doc();
+  await enrollRef.set({
+    enrollmentId: enrollRef.id,
+    flowId: flow.flowId,
+    contactId,
+    ...origin,
+    currentStep: 0,
+    status: "active",
+    startedAt: Date.now(),
+  });
+
+  for (let i = 0; i < flow.steps.length; i++) {
+    const step = flow.steps[i]!;
+    const jobRef = col(storeId, "jobs").doc();
+    await jobRef.set({
+      jobId: jobRef.id,
+      storeId,
+      enrollmentId: enrollRef.id,
+      flowId: flow.flowId,
+      stepIndex: i,
+      channel: step.action,
+      runAt: Date.now() + delayToMs(step.delay),
+      status: "scheduled",
+    });
+  }
+
+  await flowDocRef.update({ "stats.enrolled": (flow.stats?.enrolled ?? 0) + 1 });
+}
 
 // Ponto de entrada do webhook: sincroniza o pedido e roda o motor.
 type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled";
@@ -51,37 +89,30 @@ async function enrollInFlows(
   for (const doc of flowsSnap.docs) {
     const flow = doc.data() as Flow;
     if (!matches(flow.trigger, ctx)) continue;
+    await createEnrollmentWithJobs(storeId, flow, contact.contactId, { orderId: order.orderId }, doc.ref);
+  }
+}
 
-    const enrollRef = col(storeId, "enrollments").doc();
-    await enrollRef.set({
-      enrollmentId: enrollRef.id,
-      flowId: flow.flowId,
-      contactId: contact.contactId,
-      orderId: order.orderId,
-      currentStep: 0,
-      status: "active",
-      startedAt: Date.now(),
-    });
+// Inscreve um carrinho abandonado nos flows com gatilho "cart_abandoned".
+// Chamado pelo cron de carrinhos (nao ha webhook de carrinho na Nuvemshop).
+export async function enrollCartInFlows(
+  storeId: string,
+  cart: Cart,
+  contact: Contact,
+): Promise<void> {
+  if (contact.optOut) return;
 
-    for (let i = 0; i < flow.steps.length; i++) {
-      const step = flow.steps[i]!;
-      const jobRef = col(storeId, "jobs").doc();
-      const runAt = Date.now() + delayToMs(step.delay);
+  const flowsSnap = await col(storeId, "flows")
+    .where("status", "==", "active")
+    .where("trigger.event", "==", "cart_abandoned")
+    .get();
+  if (flowsSnap.empty) return;
 
-      // Agendamento via Vercel Cron: persistimos o job com runAt e o cron
-      // (/api/cron/dispatch) o coleta quando vencer. Sem dependencia de GCP.
-      await jobRef.set({
-        jobId: jobRef.id,
-        storeId,
-        enrollmentId: enrollRef.id,
-        flowId: flow.flowId,
-        stepIndex: i,
-        channel: step.action,
-        runAt,
-        status: "scheduled",
-      });
-    }
+  const ctx = buildContext(cart, contact);
 
-    await doc.ref.update({ "stats.enrolled": (flow.stats?.enrolled ?? 0) + 1 });
+  for (const doc of flowsSnap.docs) {
+    const flow = doc.data() as Flow;
+    if (!matches(flow.trigger, ctx)) continue;
+    await createEnrollmentWithJobs(storeId, flow, contact.contactId, { cartId: cart.cartId }, doc.ref);
   }
 }

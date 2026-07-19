@@ -37,6 +37,7 @@ const TRIGGER_LABEL: Record<Flow["trigger"]["event"], string> = {
   order_paid: "Pedido pago",
   order_created: "Pedido criado",
   order_fulfilled: "Pedido enviado",
+  cart_abandoned: "Carrinho abandonado",
 };
 
 export default function DashboardPage() {

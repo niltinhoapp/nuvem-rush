@@ -1,16 +1,19 @@
-// Motor de regras: avalia o trigger de um Flow contra um pedido + contato.
-import type { Condition, ConditionOp, Contact, Order, Trigger } from "@/types";
+// Motor de regras: avalia o trigger de um Flow contra um pedido/carrinho + contato.
+import type { Condition, ConditionOp, Contact, OrderItem, Trigger } from "@/types";
 
-// "Achata" o pedido em um contexto plano consultavel pelas condicoes.
-// Campos de item viram arrays (um pedido tem varios itens).
-export function buildContext(order: Order, contact: Contact): Record<string, unknown> {
+// "Achata" um pedido OU carrinho (ambos tem total + items) em um contexto plano
+// consultavel pelas condicoes. Campos de item viram arrays.
+export function buildContext(
+  source: { total: number; items: OrderItem[] },
+  contact: Contact,
+): Record<string, unknown> {
   return {
-    "order.total": order.total,
-    "order.itemsCount": order.items.reduce((s, i) => s + i.qty, 0),
-    "item.sku": order.items.map((i) => i.sku).filter(Boolean),
-    "item.productId": order.items.map((i) => i.productId).filter(Boolean),
-    "item.category": order.items.flatMap((i) => i.categoryIds),
-    "item.brand": order.items.map((i) => i.brand).filter(Boolean),
+    "order.total": source.total,
+    "order.itemsCount": source.items.reduce((s, i) => s + i.qty, 0),
+    "item.sku": source.items.map((i) => i.sku).filter(Boolean),
+    "item.productId": source.items.map((i) => i.productId).filter(Boolean),
+    "item.category": source.items.flatMap((i) => i.categoryIds),
+    "item.brand": source.items.map((i) => i.brand).filter(Boolean),
     "customer.type": contact.ordersCount <= 1 ? "first_purchase" : "recurring",
   };
 }

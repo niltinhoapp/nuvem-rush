@@ -54,6 +54,19 @@ export interface NsOrder {
   fulfillment_orders?: NsFulfillmentOrder[];
 }
 
+// Abandoned Checkout (GET /checkouts). completed_at null = abandonado.
+export interface NsCheckout {
+  id: number | string;
+  abandoned_checkout_url?: string | null;
+  contact_email?: string | null;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+  products?: NsOrderProduct[];
+  total?: string | number;
+  created_at?: string;
+  completed_at?: string | null;
+}
+
 export interface NsCategoryRef {
   id: number | string;
   name?: LocalizedString;

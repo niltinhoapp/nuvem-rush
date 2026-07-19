@@ -15,19 +15,24 @@
 // whatsappTemplateName/whatsappTemplateLang no step.
 import { col, storeRef } from "@/lib/firebase/admin";
 import { generateWhatsappContent } from "@/lib/ai/openai";
-import type { Order, Step, Store } from "@/types";
+import type { Cart, Order, Step, Store } from "@/types";
 
 // Substitui placeholders {{...}} nos parametros do template pelos dados reais
-// do pedido/contato. Usado principalmente para o link de rastreio.
+// do pedido/carrinho/contato (link de rastreio, link de recuperacao, etc.).
 function resolvePlaceholders(
   params: string[],
-  data: { trackingUrl: string; trackingCode: string; orderNumber: string; name: string },
+  data: {
+    trackingUrl: string; trackingCode: string; orderNumber: string;
+    name: string; recoveryUrl: string;
+  },
 ): string[] {
   return params.map((p) =>
     p
       .replace(/\{\{\s*trackingUrl\s*\}\}/gi, data.trackingUrl)
       .replace(/\{\{\s*trackingCode\s*\}\}/gi, data.trackingCode)
       .replace(/\{\{\s*orderNumber\s*\}\}/gi, data.orderNumber)
+      .replace(/\{\{\s*recoveryUrl\s*\}\}/gi, data.recoveryUrl)
+      .replace(/\{\{\s*cartUrl\s*\}\}/gi, data.recoveryUrl)
       .replace(/\{\{\s*name\s*\}\}/gi, data.name),
   );
 }
@@ -88,9 +93,13 @@ export async function sendWhatsapp(params: {
   const contact = (await col(storeId, "contacts").doc(enroll.contactId).get()).data()!;
   if (!contact.phone) throw new Error("contato sem telefone");
 
-  // Carrega o pedido do enrollment para resolver placeholders (rastreio etc.).
+  // Carrega o pedido OU o carrinho do enrollment para resolver placeholders
+  // (rastreio, link de recuperacao de carrinho, etc.).
   const order = enroll.orderId
     ? ((await col(storeId, "orders").doc(enroll.orderId).get()).data() as Order | undefined)
+    : undefined;
+  const cart = enroll.cartId
+    ? ((await col(storeId, "carts").doc(enroll.cartId).get()).data() as Cart | undefined)
     : undefined;
 
   const config = (step.config ?? {}) as {
@@ -109,12 +118,13 @@ export async function sendWhatsapp(params: {
     "en_US";
 
   let bodyParams = config.whatsappTemplateParams ?? [];
-  // Resolve placeholders (ex.: {{trackingUrl}}) com os dados reais do pedido.
+  // Resolve placeholders ({{trackingUrl}}, {{recoveryUrl}}, ...) com dados reais.
   if (bodyParams.length > 0) {
     bodyParams = resolvePlaceholders(bodyParams, {
       trackingUrl: order?.trackingUrl ?? "",
       trackingCode: order?.trackingCode ?? "",
       orderNumber: order?.nsOrderId ?? "",
+      recoveryUrl: cart?.recoveryUrl ?? "",
       name: contact.name ?? "",
     });
   }
