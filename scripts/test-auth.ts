@@ -28,8 +28,11 @@ const past = Math.floor(Date.now() / 1000) - 10;
 check("token valido extrai storeId (store_id)",
   verifySessionToken(makeJwt({ store_id: 12345, exp: future }))?.storeId === "12345");
 
-check("token valido extrai storeId (sub)",
-  verifySessionToken(makeJwt({ sub: 999, exp: future }))?.storeId === "999");
+check("token valido extrai storeId (storeId camelCase)",
+  verifySessionToken(makeJwt({ storeId: 999, exp: future }))?.storeId === "999");
+
+check("sub sozinho NAO e aceito (nao e o claim de loja)",
+  verifySessionToken(makeJwt({ sub: 999, exp: future })) === null);
 
 check("assinatura errada e rejeitada",
   verifySessionToken(makeJwt({ store_id: 1, exp: future }, "secret-errado")) === null);

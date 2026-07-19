@@ -9,6 +9,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export const REQUIRED_WEBHOOK_EVENTS = [
   "order/created",
   "order/paid",
+  "order/fulfilled",
   "order/cancelled",
   "product/created",
   "product/updated",

@@ -52,8 +52,9 @@ export async function POST(req: NextRequest) {
     // ---- Pedidos -> motor de regras ----
     case "order/paid":
     case "order/created":
-      // Em producao: publicar em Pub/Sub e retornar. Aqui chamamos direto.
-      // Sincroniza o pedido da API + roda o motor de regras.
+    case "order/fulfilled":
+      // order/fulfilled: pedido enviado -> sincroniza rastreio e dispara
+      // fluxos com gatilho "pedido enviado" (ex.: rastreio no WhatsApp).
       await handleOrderEvent(storeId, String(payload.id), payload.event);
       break;
 

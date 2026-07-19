@@ -54,6 +54,7 @@ export interface Product {
 export interface Contact {
   contactId: string;
   nsCustomerId: string | null;
+  name: string | null;
   email: string | null;
   phone: string | null;
   tags: string[];
@@ -79,7 +80,12 @@ export interface Order {
   total: number;
   items: OrderItem[];
   status: "paid" | "cancelled" | "open";
-  paidAt: number | null;
+  paidAt?: number | null;
+  // Logistica / rastreio (preenchido quando o pedido e enviado).
+  fulfilledAt?: number | null;
+  shippingStatus?: string | null;
+  trackingCode?: string | null;
+  trackingUrl?: string | null;
 }
 
 // ---- Motor de regras ----
@@ -102,7 +108,7 @@ export interface Condition {
 }
 
 export interface Trigger {
-  event: "order_paid" | "order_created";
+  event: "order_paid" | "order_created" | "order_fulfilled";
   match: "all" | "any";
   conditions: Condition[];
 }

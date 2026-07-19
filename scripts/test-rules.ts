@@ -12,7 +12,7 @@ function check(label: string, got: boolean, want: boolean) {
 }
 
 const contactNovo: Contact = {
-  contactId: "c1", nsCustomerId: "1", email: "a@b.com", phone: null,
+  contactId: "c1", nsCustomerId: "1", name: "Cliente Teste", email: "a@b.com", phone: null,
   tags: [], ordersCount: 1, totalSpent: 250, optOut: false, lastOrderAt: Date.now(),
 };
 

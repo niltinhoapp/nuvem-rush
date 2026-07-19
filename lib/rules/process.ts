@@ -7,16 +7,23 @@ import { syncOrder } from "@/lib/nuvemshop/sync";
 import type { Contact, Flow, Order, Store } from "@/types";
 
 // Ponto de entrada do webhook: sincroniza o pedido e roda o motor.
+type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled";
+
+const EVENT_MAP: Record<OrderWebhookEvent, "paid" | "created" | "fulfilled"> = {
+  "order/paid": "paid",
+  "order/created": "created",
+  "order/fulfilled": "fulfilled",
+};
+
 export async function handleOrderEvent(
   storeId: string,
   nsOrderId: string,
-  event: "order/paid" | "order/created",
+  event: OrderWebhookEvent,
 ): Promise<void> {
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
   if (!store || store.status !== "active") return;
 
-  const status = event === "order/paid" ? "paid" : "open";
-  const { order, contact } = await syncOrder(storeId, store.accessToken, nsOrderId, status);
+  const { order, contact } = await syncOrder(storeId, store.accessToken, nsOrderId, EVENT_MAP[event]);
 
   await enrollInFlows(storeId, order, contact, event);
 }
@@ -26,11 +33,14 @@ async function enrollInFlows(
   storeId: string,
   order: Order,
   contact: Contact,
-  event: "order/paid" | "order/created",
+  event: OrderWebhookEvent,
 ): Promise<void> {
   if (contact.optOut) return;
 
-  const triggerEvent = event === "order/paid" ? "order_paid" : "order_created";
+  const triggerEvent =
+    event === "order/paid" ? "order_paid"
+    : event === "order/fulfilled" ? "order_fulfilled"
+    : "order_created";
   const flowsSnap = await col(storeId, "flows")
     .where("status", "==", "active")
     .where("trigger.event", "==", triggerEvent)

@@ -64,6 +64,7 @@ async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> 
   const contact: Contact = {
     contactId,
     nsCustomerId,
+    name: order.customer?.name ?? order.contact_name ?? prevData?.name ?? null,
     email,
     phone: order.customer?.phone ?? order.contact_phone ?? null,
     tags: prevData?.tags ?? [],
@@ -76,12 +77,26 @@ async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> 
   return contact;
 }
 
-// Sincroniza um pedido completo: contato + itens enriquecidos + pedido.
+export type OrderEvent = "created" | "paid" | "fulfilled" | "cancelled";
+
+// Extrai o codigo/URL de rastreio do pedido cru (campo direto ou fulfillments).
+function extractTracking(raw: NsOrder): {
+  code: string | null;
+  url: string | null;
+  shippingStatus: string | null;
+} {
+  const fulfillment = (raw.fulfillments ?? []).find((f) => f.tracking_info?.code || f.tracking_info?.url);
+  const code = raw.shipping_tracking_number ?? fulfillment?.tracking_info?.code ?? null;
+  const url = raw.shipping_tracking_url ?? fulfillment?.tracking_info?.url ?? null;
+  return { code, url, shippingStatus: raw.shipping_status ?? null };
+}
+
+// Sincroniza um pedido completo: contato + itens enriquecidos + pedido + rastreio.
 export async function syncOrder(
   storeId: string,
   accessToken: string,
   nsOrderId: string,
-  status: Order["status"] = "paid",
+  event: OrderEvent = "paid",
 ): Promise<{ order: Order; contact: Contact }> {
   const client = new NuvemshopClient(storeId, accessToken);
   const raw = await client.getOrder(nsOrderId);
@@ -102,7 +117,11 @@ export async function syncOrder(
     });
   }
 
+  const status: Order["status"] = event === "cancelled" ? "cancelled" : event === "created" ? "open" : "paid";
+  const tracking = extractTracking(raw);
+
   const orderRef = col(storeId, "orders").doc(String(raw.id));
+  // Escrita com merge: so grava timestamps do evento atual (nao zera os demais).
   const order: Order = {
     orderId: orderRef.id,
     nsOrderId: String(raw.id),
@@ -110,7 +129,11 @@ export async function syncOrder(
     total: num(raw.total),
     items,
     status,
-    paidAt: status === "paid" ? Date.now() : null,
+    shippingStatus: tracking.shippingStatus,
+    trackingCode: tracking.code,
+    trackingUrl: tracking.url,
+    ...(event === "paid" ? { paidAt: Date.now() } : {}),
+    ...(event === "fulfilled" ? { fulfilledAt: Date.now() } : {}),
   };
   await orderRef.set(order, { merge: true });
 

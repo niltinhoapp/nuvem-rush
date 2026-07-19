@@ -112,6 +112,7 @@ export function TriggerNode({ data }: NodeProps) {
         >
           <Select.Option value="order_paid" label="Pedido pago" />
           <Select.Option value="order_created" label="Pedido criado" />
+          <Select.Option value="order_fulfilled" label="Pedido enviado" />
         </Select>
         <Select
           className={NODRAG}

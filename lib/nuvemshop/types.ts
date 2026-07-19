@@ -18,14 +18,24 @@ export interface NsOrderProduct {
   quantity?: string | number;
 }
 
+export interface NsFulfillment {
+  tracking_info?: { code?: string | null; url?: string | null } | null;
+}
+
 export interface NsOrder {
   id: number | string;
+  number?: number | string;
   customer?: NsCustomer;
   contact_email?: string;
   contact_name?: string;
   contact_phone?: string;
   products?: NsOrderProduct[];
   total?: string | number;
+  // Rastreio / logistica
+  shipping_status?: string | null;
+  shipping_tracking_number?: string | null;
+  shipping_tracking_url?: string | null;
+  fulfillments?: NsFulfillment[];
 }
 
 export interface NsCategoryRef {

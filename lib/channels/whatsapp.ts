@@ -15,7 +15,22 @@
 // whatsappTemplateName/whatsappTemplateLang no step.
 import { col, storeRef } from "@/lib/firebase/admin";
 import { generateWhatsappContent } from "@/lib/ai/openai";
-import type { Step, Store } from "@/types";
+import type { Order, Step, Store } from "@/types";
+
+// Substitui placeholders {{...}} nos parametros do template pelos dados reais
+// do pedido/contato. Usado principalmente para o link de rastreio.
+function resolvePlaceholders(
+  params: string[],
+  data: { trackingUrl: string; trackingCode: string; orderNumber: string; name: string },
+): string[] {
+  return params.map((p) =>
+    p
+      .replace(/\{\{\s*trackingUrl\s*\}\}/gi, data.trackingUrl)
+      .replace(/\{\{\s*trackingCode\s*\}\}/gi, data.trackingCode)
+      .replace(/\{\{\s*orderNumber\s*\}\}/gi, data.orderNumber)
+      .replace(/\{\{\s*name\s*\}\}/gi, data.name),
+  );
+}
 
 const GRAPH_VERSION = "v22.0";
 
@@ -73,6 +88,11 @@ export async function sendWhatsapp(params: {
   const contact = (await col(storeId, "contacts").doc(enroll.contactId).get()).data()!;
   if (!contact.phone) throw new Error("contato sem telefone");
 
+  // Carrega o pedido do enrollment para resolver placeholders (rastreio etc.).
+  const order = enroll.orderId
+    ? ((await col(storeId, "orders").doc(enroll.orderId).get()).data() as Order | undefined)
+    : undefined;
+
   const config = (step.config ?? {}) as {
     whatsappTemplateName?: string;
     whatsappTemplateLang?: string;
@@ -89,6 +109,15 @@ export async function sendWhatsapp(params: {
     "en_US";
 
   let bodyParams = config.whatsappTemplateParams ?? [];
+  // Resolve placeholders (ex.: {{trackingUrl}}) com os dados reais do pedido.
+  if (bodyParams.length > 0) {
+    bodyParams = resolvePlaceholders(bodyParams, {
+      trackingUrl: order?.trackingUrl ?? "",
+      trackingCode: order?.trackingCode ?? "",
+      orderNumber: order?.nsOrderId ?? "",
+      name: contact.name ?? "",
+    });
+  }
   if (bodyParams.length === 0 && step.aiPrompt && templateName !== "hello_world") {
     const text = await generateWhatsappContent(step.aiPrompt, { contact });
     bodyParams = [text];
