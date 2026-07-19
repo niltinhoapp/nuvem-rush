@@ -46,7 +46,9 @@ export async function GET(req: NextRequest) {
     );
 
     // Redireciona o lojista de volta para o admin (app incorporado).
-    return NextResponse.redirect(`${process.env.APP_BASE_URL}/dashboard?installed=1`);
+    // Pagina de sucesso simples (nao o /dashboard embarcado, que espera o Nexo
+    // do admin e trava quando a instalacao ocorre fora do iframe).
+    return NextResponse.redirect(`${process.env.APP_BASE_URL}/instalado`);
   } catch (err) {
     console.error("Erro no callback OAuth:", err);
     return NextResponse.json({ error: "falha na instalacao" }, { status: 500 });
