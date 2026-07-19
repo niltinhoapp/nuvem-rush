@@ -63,7 +63,44 @@ export async function handleOrderEvent(
 
   const { order, contact } = await syncOrder(storeId, store.accessToken, nsOrderId, EVENT_MAP[event]);
 
+  // Cliente finalizou a compra -> cancela fluxos de recuperacao de carrinho
+  // pendentes desse contato (nao faz sentido "voce esqueceu o carrinho").
+  if (event === "order/created" || event === "order/paid") {
+    await cancelCartRecovery(storeId, contact);
+  }
+
   await enrollInFlows(storeId, order, contact, event);
+}
+
+// Cancela enrollments de recuperacao de carrinho (e seus jobs agendados) do
+// contato que acabou de comprar. Casa por contactId + email + telefone, pois
+// o contato do pedido e do carrinho podem ter chaves diferentes.
+async function cancelCartRecovery(storeId: string, contact: Contact): Promise<void> {
+  const candidates = new Set<string>([contact.contactId]);
+  if (contact.email) candidates.add(`email:${contact.email}`);
+  if (contact.phone) candidates.add(`phone:${contact.phone}`);
+
+  for (const cid of candidates) {
+    const snap = await col(storeId, "enrollments")
+      .where("contactId", "==", cid)
+      .where("status", "==", "active")
+      .get();
+
+    for (const doc of snap.docs) {
+      const enr = doc.data() as { enrollmentId: string; cartId?: string };
+      if (!enr.cartId) continue; // so cancela recuperacao de carrinho
+
+      await doc.ref.update({ status: "cancelled" });
+
+      const jobs = await col(storeId, "jobs")
+        .where("enrollmentId", "==", enr.enrollmentId)
+        .where("status", "==", "scheduled")
+        .get();
+      for (const j of jobs.docs) await j.ref.update({ status: "cancelled" });
+
+      await col(storeId, "carts").doc(enr.cartId).set({ status: "recovered" }, { merge: true });
+    }
+  }
 }
 
 // Avalia os flows e agenda os disparos.
