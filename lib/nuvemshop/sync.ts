@@ -79,6 +79,16 @@ async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> 
 
 export type OrderEvent = "created" | "paid" | "fulfilled" | "cancelled";
 
+// Limpa o codigo de rastreio digitado pelo lojista: remove rotulos comuns
+// ("codigo:", "rastreio:"), espacos e caracteres soltos nas pontas.
+function cleanTrackingCode(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = String(raw)
+    .replace(/^\s*(c[oó]digo|rastreio|rastreamento|tracking)?\s*:?\s*/i, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 // Extrai o codigo/URL de rastreio do pedido cru (campo direto ou fulfillments).
 function extractTracking(raw: NsOrder): {
   code: string | null;
@@ -95,11 +105,11 @@ function extractTracking(raw: NsOrder): {
         (f as { tracking_info?: NsTrackingInfo }).tracking_info?.url),
   );
 
-  const code =
+  const rawCode =
     raw.shipping_tracking_number ?? fo?.tracking_info?.code ?? inline?.tracking_info?.code ?? null;
   const url =
     raw.shipping_tracking_url ?? fo?.tracking_info?.url ?? inline?.tracking_info?.url ?? null;
-  return { code, url, shippingStatus: raw.shipping_status ?? null };
+  return { code: cleanTrackingCode(rawCode), url: url ?? null, shippingStatus: raw.shipping_status ?? null };
 }
 
 // Sincroniza um pedido completo: contato + itens enriquecidos + pedido + rastreio.
