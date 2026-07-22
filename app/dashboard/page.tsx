@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const [connection, setConnection] = useState<ConnectionStatus>("loading");
   const [flows, setFlows] = useState<Flow[] | null>(null);
   const [flowsFailed, setFlowsFailed] = useState(false);
+  const [wa, setWa] = useState<{ connected: boolean; phoneNumberId: string | null } | null>(null);
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -64,12 +65,30 @@ export default function DashboardPage() {
       });
   };
 
+  const loadWhatsappStatus = () => {
+    sessionToken()
+      .then(async (token) => {
+        const r = await fetch("/api/whatsapp/connect", { headers: { Authorization: `Bearer ${token}` } });
+        const data = await r.json();
+        setWa({ connected: !!data.connected, phoneNumberId: data.phoneNumberId ?? null });
+      })
+      .catch((e) => console.error("Falha ao checar status do WhatsApp:", e));
+  };
+
+  // Abre /connect-whatsapp em nova aba (popups da Meta nao funcionam bem
+  // dentro do iframe do admin), levando o session token na URL.
+  const openConnectWhatsapp = async () => {
+    const token = await sessionToken();
+    window.open(`/connect-whatsapp?token=${encodeURIComponent(token)}`, "_blank");
+  };
+
   useEffect(() => {
     initNexo()
       .then((instance) => {
         setNexo(instance);
         setConnection("ready");
         loadFlows();
+        loadWhatsappStatus();
       })
       .catch((e) => {
         console.error("Nexo falhou:", e);
@@ -81,6 +100,10 @@ export default function DashboardPage() {
   const content = (
     <Box padding="6" display="flex" flexDirection="column" gap="6">
       <PageHeader />
+
+      {connection === "ready" && (
+        <WhatsappStatusCard wa={wa} onConnect={openConnectWhatsapp} onRefresh={loadWhatsappStatus} />
+      )}
 
       {connection === "loading" && <CenteredState icon={<Spinner size="large" />} title="Conectando ao admin..." />}
 
@@ -132,6 +155,63 @@ function PageHeader() {
         <Text color="neutral-textLow">Automações de e-mail e WhatsApp para o pós-venda</Text>
       </Box>
     </Box>
+  );
+}
+
+// Card de conexao do WhatsApp (Embedded Signup). Mostra o status e o botao
+// que abre /connect-whatsapp em nova aba (o fluxo com a Meta nao roda no iframe).
+function WhatsappStatusCard({
+  wa,
+  onConnect,
+  onRefresh,
+}: {
+  wa: { connected: boolean; phoneNumberId: string | null } | null;
+  onConnect: () => void;
+  onRefresh: () => void;
+}) {
+  if (wa?.connected) {
+    return (
+      <Card padding="none">
+        <Card.Body padding="base">
+          <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+            <Box display="flex" alignItems="center" gap="3">
+              <Icon source={<WhatsappIcon size={24} />} color="success-interactive" />
+              <Box display="flex" flexDirection="column">
+                <Text fontWeight="bold">WhatsApp conectado</Text>
+                <Text fontSize="caption" color="neutral-textLow">
+                  Numero: {wa.phoneNumberId}
+                </Text>
+              </Box>
+            </Box>
+            <Tag appearance="success">Conectado</Tag>
+          </Box>
+        </Card.Body>
+      </Card>
+    );
+  }
+
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" alignItems="center" gap="3">
+            <Icon source={<WhatsappIcon size={24} />} color="neutral-textLow" />
+            <Box display="flex" flexDirection="column">
+              <Text fontWeight="bold">Conecte seu WhatsApp</Text>
+              <Text fontSize="caption" color="neutral-textLow">
+                Conecte a conta oficial da Meta para enviar mensagens de pos-venda.
+              </Text>
+            </Box>
+          </Box>
+          <Box display="flex" gap="2">
+            <Button onClick={onRefresh}>Atualizar</Button>
+            <Button appearance="primary" onClick={onConnect}>
+              Conectar WhatsApp
+            </Button>
+          </Box>
+        </Box>
+      </Card.Body>
+    </Card>
   );
 }
 
