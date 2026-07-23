@@ -10,6 +10,7 @@ import { storeRef } from "@/lib/firebase/admin";
 import {
   exchangeCodeForToken,
   subscribeAppToWaba,
+  registerPhoneNumber,
   createDefaultTemplate,
   DEFAULT_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_LANG,
@@ -51,6 +52,16 @@ export async function POST(req: NextRequest) {
 
     // 2. Inscreve nosso app na WABA dele (webhooks de status/template).
     await subscribeAppToWaba(body.wabaId, accessToken);
+
+    // 2.1. Registra o numero na Cloud API (necessario para numeros novos;
+    // numeros ja em coexistencia retornam "already registered", tratado como
+    // ok). Best effort: se falhar por outro motivo, a conexao ainda vale —
+    // o lojista pode registrar manualmente pelo WhatsApp Manager depois.
+    try {
+      await registerPhoneNumber(body.phoneNumberId, accessToken);
+    } catch (err) {
+      console.warn(`[whatsapp connect] falha ao registrar numero (${storeId}):`, err);
+    }
 
     // 3. Template padrao de pos-venda na conta DELE (best effort: se falhar,
     //    a conexao vale mesmo assim e o lojista cria depois pela UI da Meta).

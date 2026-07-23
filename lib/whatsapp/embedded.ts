@@ -83,23 +83,33 @@ export async function subscribeAppToWaba(
 }
 
 // Registra o numero na Cloud API (necessario para numeros novos; numeros em
-// coexistencia com o app WhatsApp Business ja vem registrados). O pin e a
-// verificacao em duas etapas do numero — se nao existir, este define uma.
+// coexistencia com o app WhatsApp Business ja vem registrados, e registrar de
+// novo retorna erro "already registered" — tratado aqui como nao-fatal, igual
+// ao createDefaultTemplate). O pin e a verificacao em duas etapas do numero —
+// se nao existir, este define uma.
 export async function registerPhoneNumber(
   phoneNumberId: string,
   token: string,
   pin = "152563",
-): Promise<void> {
-  await graphJson(
-    await fetch(`${GRAPH}/${phoneNumberId}/register`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ messaging_product: "whatsapp", pin }),
-    }),
-  );
+): Promise<{ registered: boolean; alreadyRegistered: boolean }> {
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/register`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ messaging_product: "whatsapp", pin }),
+  });
+  if (res.ok) return { registered: true, alreadyRegistered: false };
+
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: { message?: string; error_user_title?: string };
+  };
+  const msg = `${body.error?.message ?? ""} ${body.error?.error_user_title ?? ""}`;
+  if (/already registered|already verified|two step/i.test(msg)) {
+    return { registered: false, alreadyRegistered: true };
+  }
+  throw new Error(`registrar numero: ${msg.trim() || `HTTP ${res.status}`}`);
 }
 
 // Cria o template padrao de pos-venda na WABA DO LOJISTA. A aprovacao pela

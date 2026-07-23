@@ -45,12 +45,13 @@ async function createEnrollmentWithJobs(
 }
 
 // Ponto de entrada do webhook: sincroniza o pedido e roda o motor.
-type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled";
+type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled" | "order/cancelled";
 
-const EVENT_MAP: Record<OrderWebhookEvent, "paid" | "created" | "fulfilled"> = {
+const EVENT_MAP: Record<OrderWebhookEvent, "paid" | "created" | "fulfilled" | "cancelled"> = {
   "order/paid": "paid",
   "order/created": "created",
   "order/fulfilled": "fulfilled",
+  "order/cancelled": "cancelled",
 };
 
 export async function handleOrderEvent(
@@ -63,6 +64,13 @@ export async function handleOrderEvent(
 
   const { order, contact } = await syncOrder(storeId, store.accessToken, nsOrderId, EVENT_MAP[event]);
 
+  // Pedido cancelado -> nao ha "trigger" a avaliar, so cancela o que ja
+  // estava agendado para esse pedido (ex.: rastreio, cupom de recompra).
+  if (event === "order/cancelled") {
+    await cancelOrderFlows(storeId, order.orderId);
+    return;
+  }
+
   // Cliente finalizou a compra -> cancela fluxos de recuperacao de carrinho
   // pendentes desse contato (nao faz sentido "voce esqueceu o carrinho").
   if (event === "order/created" || event === "order/paid") {
@@ -70,6 +78,25 @@ export async function handleOrderEvent(
   }
 
   await enrollInFlows(storeId, order, contact, event);
+}
+
+// Cancela enrollments (e jobs agendados) vinculados a um pedido que foi
+// cancelado na Nuvemshop — evita mandar rastreio/recompra de venda desfeita.
+async function cancelOrderFlows(storeId: string, orderId: string): Promise<void> {
+  const snap = await col(storeId, "enrollments")
+    .where("orderId", "==", orderId)
+    .where("status", "==", "active")
+    .get();
+
+  for (const doc of snap.docs) {
+    await doc.ref.update({ status: "cancelled" });
+
+    const jobs = await col(storeId, "jobs")
+      .where("enrollmentId", "==", doc.id)
+      .where("status", "==", "scheduled")
+      .get();
+    for (const j of jobs.docs) await j.ref.update({ status: "cancelled" });
+  }
 }
 
 // Cancela enrollments de recuperacao de carrinho (e seus jobs agendados) do

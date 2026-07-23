@@ -46,12 +46,14 @@ const OPS: { value: ConditionOp; label: string }[] = [
   { value: "lt", label: "menor que" },
 ];
 
+// "task" fica fora da lista: tipo existe (ActionType) mas nao ha canal
+// implementado ainda — nao oferecemos no construtor para nao prometer o
+// que nao funciona.
 const ACTIONS: { value: Step["action"]; label: string }[] = [
   { value: "email", label: "Enviar e-mail" },
   { value: "whatsapp", label: "Enviar WhatsApp" },
   { value: "tag", label: "Adicionar tag" },
   { value: "webhook", label: "Acionar webhook" },
-  { value: "task", label: "Criar tarefa" },
 ];
 
 const ACTION_ICON: Record<Step["action"], React.ReactNode> = {
@@ -279,20 +281,50 @@ export function StepNode({ data }: NodeProps) {
         ))}
       </Select>
 
-      <Box display="flex" flexDirection="column" gap="1">
-        <Box display="flex" alignItems="center" gap="1">
-          <Icon source={<MagicWandIcon size={14} />} color="ai-generative" />
-          <Text fontSize="caption" color="neutral-textLow">
-            Prompt de IA (opcional) — gera o conteúdo automaticamente
-          </Text>
+      {(step.action === "email" || step.action === "whatsapp") && (
+        <Box display="flex" flexDirection="column" gap="1">
+          <Box display="flex" alignItems="center" gap="1">
+            <Icon source={<MagicWandIcon size={14} />} color="ai-generative" />
+            <Text fontSize="caption" color="neutral-textLow">
+              Prompt de IA (opcional) — gera o conteúdo automaticamente
+            </Text>
+          </Box>
+          <Input
+            className={NODRAG}
+            placeholder="Ex.: agradeça a compra e sugira produtos relacionados"
+            value={step.aiPrompt ?? ""}
+            onChange={(e) => update({ aiPrompt: e.target.value })}
+          />
         </Box>
-        <Input
-          className={NODRAG}
-          placeholder="Ex.: agradeça a compra e sugira produtos relacionados"
-          value={step.aiPrompt ?? ""}
-          onChange={(e) => update({ aiPrompt: e.target.value })}
-        />
-      </Box>
+      )}
+
+      {step.action === "tag" && (
+        <Box display="flex" flexDirection="column" gap="1">
+          <Text fontSize="caption" color="neutral-textLow">
+            Nome da tag
+          </Text>
+          <Input
+            className={NODRAG}
+            placeholder="Ex.: cliente_vip"
+            value={(step.config as { tagName?: string } | undefined)?.tagName ?? ""}
+            onChange={(e) => update({ config: { ...step.config, tagName: e.target.value } })}
+          />
+        </Box>
+      )}
+
+      {step.action === "webhook" && (
+        <Box display="flex" flexDirection="column" gap="1">
+          <Text fontSize="caption" color="neutral-textLow">
+            URL do webhook
+          </Text>
+          <Input
+            className={NODRAG}
+            placeholder="https://sua-ferramenta.com/webhook"
+            value={(step.config as { webhookUrl?: string } | undefined)?.webhookUrl ?? ""}
+            onChange={(e) => update({ config: { ...step.config, webhookUrl: e.target.value } })}
+          />
+        </Box>
+      )}
 
       {/* Conector de saída: permite encadear a próxima ação a esta.
           Sem isto, a 2ª ação em diante (que se liga na anterior, não

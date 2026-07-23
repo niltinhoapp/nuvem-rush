@@ -53,13 +53,11 @@ export async function POST(req: NextRequest) {
     case "order/paid":
     case "order/created":
     case "order/fulfilled":
+    case "order/cancelled":
       // order/fulfilled: pedido enviado -> sincroniza rastreio e dispara
       // fluxos com gatilho "pedido enviado" (ex.: rastreio no WhatsApp).
+      // order/cancelled: cancela enrollments/jobs pendentes desse pedido.
       await handleOrderEvent(storeId, String(payload.id), payload.event);
-      break;
-
-    case "order/cancelled":
-      // TODO: cancelar jobs pendentes vinculados a este pedido.
       break;
 
     default:

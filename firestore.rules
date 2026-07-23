@@ -14,21 +14,24 @@ service cloud.firestore {
     }
 
     match /stores/{storeId} {
-      // Loja: leitura permitida ao dono; escrita do accessToken so via servidor.
-      allow read: if isOwner(storeId);
-      allow write: if false;
+      // O doc da loja guarda accessToken (Nuvemshop) e whatsapp.accessToken
+      // (Meta) — segredos. NUNCA expor ao client; leitura/escrita so via
+      // Admin SDK. O dashboard usa o session token do Nexo pelas rotas de API.
+      allow read, write: if false;
 
       // Configuracoes que o lojista edita pelo painel.
       match /flows/{flowId}    { allow read, write: if isOwner(storeId); }
       match /templates/{tplId} { allow read, write: if isOwner(storeId); }
       match /contacts/{cId}    { allow read: if isOwner(storeId); }
       match /products/{pId}    { allow read: if isOwner(storeId); }
+      match /carts/{c}         { allow read: if isOwner(storeId); allow write: if false; }
 
       // Internos: nunca acessiveis pelo client.
-      match /jobs/{j}        { allow read, write: if false; }
-      match /logs/{l}        { allow read: if isOwner(storeId); allow write: if false; }
-      match /enrollments/{e} { allow read: if isOwner(storeId); allow write: if false; }
-      match /orders/{o}      { allow read: if isOwner(storeId); allow write: if false; }
+      match /jobs/{j}          { allow read, write: if false; }
+      match /logs/{l}          { allow read: if isOwner(storeId); allow write: if false; }
+      match /enrollments/{e}   { allow read: if isOwner(storeId); allow write: if false; }
+      match /orders/{o}        { allow read: if isOwner(storeId); allow write: if false; }
+      match /lgpd_requests/{r} { allow read, write: if false; }
     }
   }
 }

@@ -3,6 +3,8 @@
 import { col, storeRef } from "@/lib/firebase/admin";
 import { sendEmail } from "@/lib/channels/email";
 import { sendWhatsapp } from "@/lib/channels/whatsapp";
+import { applyTag } from "@/lib/channels/tag";
+import { triggerWebhook } from "@/lib/channels/webhook";
 import type { Job, Flow, Store } from "@/types";
 
 export type DispatchResult =
@@ -56,8 +58,15 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
       await sendEmail({ storeId, enrollmentId: job.enrollmentId, step });
     } else if (step.action === "whatsapp") {
       await sendWhatsapp({ storeId, enrollmentId: job.enrollmentId, step });
+    } else if (step.action === "tag") {
+      await applyTag({ storeId, enrollmentId: job.enrollmentId, step });
+    } else if (step.action === "webhook") {
+      await triggerWebhook({ storeId, enrollmentId: job.enrollmentId, step });
+    } else {
+      // Acao sem canal implementado (ex.: "task"): falha explicita em vez de
+      // marcar como "enviado" silenciosamente.
+      throw new Error(`acao "${step.action}" nao implementada`);
     }
-    // TODO: tag, webhook, task.
 
     await jobRef.update({ status: "sent" });
     await storeRef(storeId).update(
