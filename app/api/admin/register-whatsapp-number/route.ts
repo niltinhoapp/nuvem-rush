@@ -13,8 +13,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { registerPhoneNumber } from "@/lib/whatsapp/embedded";
 
 export async function GET(req: NextRequest) {
+  // Aceita ADMIN_API_KEY (variavel dedicada) ou, como alternativa, a
+  // WHATSAPP_WEBHOOK_VERIFY_TOKEN. Ver comentario em whatsapp-diagnostico.
   const key = req.nextUrl.searchParams.get("key");
-  if (!key || key !== process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+  const expected =
+    process.env.ADMIN_API_KEY ?? process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  if (!expected || !key || key !== expected) {
     return NextResponse.json({ error: "nao autorizado" }, { status: 403 });
   }
 

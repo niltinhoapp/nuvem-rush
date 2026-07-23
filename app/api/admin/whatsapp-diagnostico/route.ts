@@ -20,8 +20,14 @@ async function get(url: string, token: string) {
 }
 
 export async function GET(req: NextRequest) {
+  // Aceita ADMIN_API_KEY (variavel dedicada, definida por voce) e mantem a
+  // WHATSAPP_WEBHOOK_VERIFY_TOKEN como alternativa. A Vercel nao permite ler
+  // de volta variaveis sensiveis, entao a chave dedicada evita ter que
+  // sobrescrever o verify token do webhook, que a Meta tambem usa.
   const key = req.nextUrl.searchParams.get("key");
-  if (!key || key !== process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+  const expected =
+    process.env.ADMIN_API_KEY ?? process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  if (!expected || !key || key !== expected) {
     return NextResponse.json({ error: "nao autorizado" }, { status: 403 });
   }
 
