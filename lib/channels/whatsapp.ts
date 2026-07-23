@@ -164,3 +164,37 @@ export async function sendWhatsapp(params: {
     throw new Error(`WhatsApp API ${res.status}: ${body}`);
   }
 }
+
+// Envio de MENSAGEM DE TESTE: usado pelo botao "Enviar mensagem de teste" do
+// dashboard. Serve para o lojista validar a conexao (e para a evidencia em
+// video exigida na analise do app da Meta). Usa o template hello_world, que
+// toda WABA ja tem aprovado por padrao.
+export async function sendTestWhatsapp(params: {
+  storeId: string;
+  to: string;
+}): Promise<void> {
+  const { storeId, to } = params;
+  const creds = await resolveCredentials(storeId);
+
+  const res = await fetch(
+    `https://graph.facebook.com/${GRAPH_VERSION}/${creds.phoneNumberId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${creds.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: normalizePhone(to),
+        type: "template",
+        template: { name: "hello_world", language: { code: "en_US" } },
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`WhatsApp API ${res.status}: ${body}`);
+  }
+}

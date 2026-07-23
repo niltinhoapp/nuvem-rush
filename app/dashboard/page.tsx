@@ -4,7 +4,7 @@
 // https://dev.nuvemshop.com.br/docs/homologation/checklist
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
-import { Box, Title, Text, Button, Card, Tag, Icon, Spinner } from "@nimbus-ds/components";
+import { Box, Title, Text, Button, Card, Tag, Icon, Spinner, Input } from "@nimbus-ds/components";
 import {
   MailIcon,
   WhatsappIcon,
@@ -45,6 +45,10 @@ export default function DashboardPage() {
   const [flows, setFlows] = useState<Flow[] | null>(null);
   const [flowsFailed, setFlowsFailed] = useState(false);
   const [wa, setWa] = useState<{ connected: boolean; phoneNumberId: string | null } | null>(null);
+  const [testState, setTestState] = useState<{ sending: boolean; msg: string }>({
+    sending: false,
+    msg: "",
+  });
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -82,6 +86,29 @@ export default function DashboardPage() {
     window.open(`/connect-whatsapp?token=${encodeURIComponent(token)}`, "_blank");
   };
 
+  // Envia uma mensagem de teste para o numero informado, para o lojista
+  // validar a conexao sem precisar esperar um pedido real.
+  const sendTest = async (to: string) => {
+    setTestState({ sending: true, msg: "" });
+    try {
+      const token = await sessionToken();
+      const r = await fetch("/api/whatsapp/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ to }),
+      });
+      const data = await r.json();
+      setTestState({
+        sending: false,
+        msg: r.ok
+          ? "Mensagem enviada! Confira seu WhatsApp."
+          : `Falha: ${data.detail ?? data.error ?? "erro desconhecido"}`,
+      });
+    } catch (e) {
+      setTestState({ sending: false, msg: `Falha: ${String(e)}` });
+    }
+  };
+
   useEffect(() => {
     initNexo()
       .then((instance) => {
@@ -102,7 +129,13 @@ export default function DashboardPage() {
       <PageHeader />
 
       {connection === "ready" && (
-        <WhatsappStatusCard wa={wa} onConnect={openConnectWhatsapp} onRefresh={loadWhatsappStatus} />
+        <WhatsappStatusCard
+          wa={wa}
+          onConnect={openConnectWhatsapp}
+          onRefresh={loadWhatsappStatus}
+          onTest={sendTest}
+          testState={testState}
+        />
       )}
 
       {connection === "loading" && <CenteredState icon={<Spinner size="large" />} title="Conectando ao admin..." />}
@@ -158,56 +191,86 @@ function PageHeader() {
   );
 }
 
-// Card de conexao do WhatsApp (Embedded Signup). Mostra o status e o botao
-// que abre /connect-whatsapp em nova aba (o fluxo com a Meta nao roda no iframe).
+// Card de conexao do WhatsApp (Embedded Signup) + envio de mensagem de teste.
+// O botao "Conectar" abre /connect-whatsapp em nova aba (o fluxo com a Meta
+// nao roda dentro do iframe). O teste funciona mesmo antes de conectar,
+// usando o numero global — util para o lojista validar o canal.
 function WhatsappStatusCard({
   wa,
   onConnect,
   onRefresh,
+  onTest,
+  testState,
 }: {
   wa: { connected: boolean; phoneNumberId: string | null } | null;
   onConnect: () => void;
   onRefresh: () => void;
+  onTest: (to: string) => void;
+  testState: { sending: boolean; msg: string };
 }) {
-  if (wa?.connected) {
-    return (
-      <Card padding="none">
-        <Card.Body padding="base">
-          <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
-            <Box display="flex" alignItems="center" gap="3">
-              <Icon source={<WhatsappIcon size={24} />} color="success-interactive" />
-              <Box display="flex" flexDirection="column">
-                <Text fontWeight="bold">WhatsApp conectado</Text>
-                <Text fontSize="caption" color="neutral-textLow">
-                  Numero: {wa.phoneNumberId}
-                </Text>
-              </Box>
-            </Box>
-            <Tag appearance="success">Conectado</Tag>
-          </Box>
-        </Card.Body>
-      </Card>
-    );
-  }
+  const [testTo, setTestTo] = useState("");
+  const connected = !!wa?.connected;
 
   return (
     <Card padding="none">
       <Card.Body padding="base">
-        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
-          <Box display="flex" alignItems="center" gap="3">
-            <Icon source={<WhatsappIcon size={24} />} color="neutral-textLow" />
-            <Box display="flex" flexDirection="column">
-              <Text fontWeight="bold">Conecte seu WhatsApp</Text>
-              <Text fontSize="caption" color="neutral-textLow">
-                Conecte a conta oficial da Meta para enviar mensagens de pos-venda.
-              </Text>
+        <Box display="flex" flexDirection="column" gap="4">
+          <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+            <Box display="flex" alignItems="center" gap="3">
+              <Icon
+                source={<WhatsappIcon size={24} />}
+                color={connected ? "success-interactive" : "neutral-textLow"}
+              />
+              <Box display="flex" flexDirection="column">
+                <Text fontWeight="bold">
+                  {connected ? "WhatsApp conectado" : "Conecte seu WhatsApp"}
+                </Text>
+                <Text fontSize="caption" color="neutral-textLow">
+                  {connected
+                    ? `Número: ${wa?.phoneNumberId}`
+                    : "Conecte a conta oficial da Meta para enviar mensagens de pós-venda."}
+                </Text>
+              </Box>
             </Box>
+            {connected ? (
+              <Tag appearance="success">Conectado</Tag>
+            ) : (
+              <Box display="flex" gap="2">
+                <Button onClick={onRefresh}>Atualizar</Button>
+                <Button appearance="primary" onClick={onConnect}>
+                  Conectar WhatsApp
+                </Button>
+              </Box>
+            )}
           </Box>
-          <Box display="flex" gap="2">
-            <Button onClick={onRefresh}>Atualizar</Button>
-            <Button appearance="primary" onClick={onConnect}>
-              Conectar WhatsApp
-            </Button>
+
+          {/* Envio de teste: valida o canal sem precisar de um pedido real. */}
+          <Box display="flex" flexDirection="column" gap="2">
+            <Text fontSize="caption" color="neutral-textLow">
+              Enviar mensagem de teste (com DDD, ex.: 14996807881)
+            </Text>
+            <Box display="flex" gap="2" alignItems="center">
+              <Input
+                placeholder="14996807881"
+                value={testTo}
+                onChange={(e) => setTestTo(e.target.value)}
+              />
+              <Button
+                appearance="primary"
+                disabled={testState.sending || testTo.trim().length < 10}
+                onClick={() => onTest(testTo)}
+              >
+                {testState.sending ? "Enviando..." : "Enviar teste"}
+              </Button>
+            </Box>
+            {testState.msg && (
+              <Text
+                fontSize="caption"
+                color={testState.msg.startsWith("Falha") ? "danger-textLow" : "success-textLow"}
+              >
+                {testState.msg}
+              </Text>
+            )}
           </Box>
         </Box>
       </Card.Body>
