@@ -174,7 +174,17 @@ export async function sendTestWhatsapp(params: {
   to: string;
 }): Promise<void> {
   const { storeId, to } = params;
-  const creds = await resolveCredentials(storeId);
+
+  // Se WHATSAPP_TEST_PHONE_NUMBER_ID estiver definido (numero de teste da Meta),
+  // o botao de teste usa ele — sem alterar o WHATSAPP_PHONE_NUMBER_ID de
+  // producao. Util para gravar os videos da analise da Meta com o numero
+  // sandbox. Usa o mesmo WHATSAPP_ACCESS_TOKEN (que ja tem acesso a WABA de teste).
+  const testPhoneId = process.env.WHATSAPP_TEST_PHONE_NUMBER_ID;
+  const testToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  const creds =
+    testPhoneId && testToken
+      ? { phoneNumberId: testPhoneId, accessToken: testToken }
+      : await resolveCredentials(storeId);
 
   const res = await fetch(
     `https://graph.facebook.com/${GRAPH_VERSION}/${creds.phoneNumberId}/messages`,
