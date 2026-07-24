@@ -12,8 +12,9 @@ import type { Store } from "@/types";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function GET(req: NextRequest) {
+  // Fail-closed: sem CRON_SECRET configurado, recusa (nao expoe o cron).
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "nao autorizado" }, { status: 401 });
   }
 

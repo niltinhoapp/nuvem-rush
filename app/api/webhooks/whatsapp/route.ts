@@ -23,11 +23,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  // Por enquanto so registramos o evento; statuses de entrega e de template
-  // podem alimentar os logs por loja no futuro.
+  // Registramos apenas o TIPO do evento, sem o corpo — o payload da Meta
+  // contem telefone do cliente (PII) e nao deve ir para os logs (LGPD).
   try {
     const body = await req.json();
-    console.log("[whatsapp webhook]", JSON.stringify(body).slice(0, 2000));
+    const change = body?.entry?.[0]?.changes?.[0];
+    console.log("[whatsapp webhook]", change?.field ?? "evento", "recebido");
   } catch {
     // corpo vazio/invalido — ignora
   }
