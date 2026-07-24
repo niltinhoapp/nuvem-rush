@@ -13,7 +13,7 @@ export default function PrivacidadePage() {
       <p><em>Última atualização: 21 de junho de 2026.</em></p>
 
       <p>
-        O Nuvem Rush ("aplicativo") é uma ferramenta de automação de pós-venda
+        O Nuvem Rush (&quot;aplicativo&quot;) é uma ferramenta de automação de pós-venda
         integrada à Nuvemshop. Esta política descreve como tratamos os dados das
         lojas e de seus clientes, em conformidade com a Lei Geral de Proteção de
         Dados (LGPD, Lei nº 13.709/2018).

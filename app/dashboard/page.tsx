@@ -121,7 +121,6 @@ export default function DashboardPage() {
         console.error("Nexo falhou:", e);
         setConnection("error");
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const content = (

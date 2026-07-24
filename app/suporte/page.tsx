@@ -24,7 +24,7 @@ export default function SuportePage() {
 
       <h2>Perguntas frequentes</h2>
       <p><strong>Como crio uma automação?</strong> Acesse a aba do Nuvem Rush no
-        administrador da sua loja e use o construtor de fluxos "SE → ENTÃO".</p>
+        administrador da sua loja e use o construtor de fluxos &quot;SE → ENTÃO&quot;.</p>
       <p><strong>Os disparos têm atraso?</strong> Você define o tempo de cada etapa
         (após X minutos, horas ou dias da compra).</p>
       <p><strong>Como cancelo?</strong> Basta desinstalar o aplicativo pelo painel da
