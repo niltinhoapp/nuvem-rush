@@ -31,8 +31,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "nao autorizado" }, { status: 403 });
   }
 
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const wabaId = process.env.WHATSAPP_WABA_ID;
+  // Permite testar IDs avulsos via query (?phoneNumberId=...&wabaId=...) antes
+  // de alterar as variaveis de ambiente — evita um ciclo de redeploy so para
+  // descobrir se o token enxerga um numero/WABA novo.
+  const sp = req.nextUrl.searchParams;
+  const phoneNumberId = sp.get("phoneNumberId") ?? process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const wabaId = sp.get("wabaId") ?? process.env.WHATSAPP_WABA_ID;
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   if (!token) {
     return NextResponse.json({ error: "WHATSAPP_ACCESS_TOKEN ausente" }, { status: 500 });
