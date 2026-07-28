@@ -1,16 +1,20 @@
 rules_version = '2';
-// Isolamento multi-tenant: cada usuario so acessa as lojas em users/{uid}.storeIds.
+// Isolamento multi-tenant: o vinculo usuario -> loja e criado somente pelo backend.
 // Colecoes sensiveis (accessToken, jobs, logs) sao acessadas SOMENTE pelo Admin SDK.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function isOwner(storeId) {
       return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && storeId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.storeIds;
     }
 
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      // O cliente pode consultar o proprio vinculo, mas nunca criar/adicionar storeIds.
+      // Escritas devem passar pelo backend/Admin SDK apos validar a sessao Nexo.
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
     }
 
     match /stores/{storeId} {
