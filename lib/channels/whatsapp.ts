@@ -108,14 +108,21 @@ export async function sendWhatsapp(params: {
     whatsappTemplateParams?: string[];
   };
 
-  // Prioridade: template do step > template padrao da conta conectada >
-  // hello_world (so para validar envio em teste).
-  const templateName =
-    config.whatsappTemplateName ?? creds.defaultTemplateName ?? "hello_world";
+  // Prioridade: template do step > template padrao da conta conectada.
+  // NUNCA cai em hello_world aqui: mandar "Hello World" em ingles para o
+  // cliente final e pior do que falhar. Se nao ha template, falha explicita
+  // (o job fica "failed" no log, visivel, em vez de enviar lixo).
+  const templateName = config.whatsappTemplateName ?? creds.defaultTemplateName;
+  if (!templateName) {
+    throw new Error(
+      "sem template de WhatsApp configurado (nem no step, nem na conta). " +
+        "Configure um template aprovado antes de disparar.",
+    );
+  }
   const languageCode =
     config.whatsappTemplateLang ??
     (config.whatsappTemplateName ? "pt_BR" : creds.defaultTemplateLang) ??
-    "en_US";
+    "pt_BR";
 
   let bodyParams = config.whatsappTemplateParams ?? [];
   // Resolve placeholders ({{trackingUrl}}, {{recoveryUrl}}, ...) com dados reais.
@@ -128,7 +135,7 @@ export async function sendWhatsapp(params: {
       name: contact.name ?? "",
     });
   }
-  if (bodyParams.length === 0 && step.aiPrompt && templateName !== "hello_world") {
+  if (bodyParams.length === 0 && step.aiPrompt) {
     try {
       const text = await generateWhatsappContent(step.aiPrompt, { contact });
       bodyParams = [text];
