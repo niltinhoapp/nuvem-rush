@@ -129,8 +129,16 @@ export async function sendWhatsapp(params: {
     });
   }
   if (bodyParams.length === 0 && step.aiPrompt && templateName !== "hello_world") {
-    const text = await generateWhatsappContent(step.aiPrompt, { contact });
-    bodyParams = [text];
+    try {
+      const text = await generateWhatsappContent(step.aiPrompt, { contact });
+      bodyParams = [text];
+    } catch (err) {
+      // IA indisponivel (sem OPENAI_API_KEY, timeout ou erro): NUNCA derruba o
+      // envio. Usa um texto padrao para preencher a variavel do template.
+      console.warn("[whatsapp] IA indisponivel, usando fallback:", String(err));
+      const nome = contact.name ?? "";
+      bodyParams = [nome ? `Ola ${nome}!` : "Ola!"];
+    }
   }
 
   const components =

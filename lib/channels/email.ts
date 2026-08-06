@@ -49,13 +49,30 @@ export async function sendEmail(params: {
   let html = "";
 
   if (step.aiPrompt) {
-    const ai = await generateEmailContent(step.aiPrompt, { contact });
-    subject = ai.subject;
-    html = ai.html;
+    try {
+      const ai = await generateEmailContent(step.aiPrompt, { contact });
+      subject = ai.subject;
+      html = ai.html;
+    } catch (err) {
+      // IA indisponivel (sem OPENAI_API_KEY, timeout ou erro): NUNCA derruba o
+      // envio. Cai para o template configurado, se houver.
+      console.warn("[email] IA indisponivel, usando fallback:", String(err));
+      if (step.templateId) {
+        const tpl = (await col(storeId, "templates").doc(step.templateId).get()).data();
+        subject = (tpl?.subject as string) ?? subject;
+        html = (tpl?.html as string) ?? "";
+      }
+    }
   } else if (step.templateId) {
     const tpl = (await col(storeId, "templates").doc(step.templateId).get()).data();
     subject = (tpl?.subject as string) ?? subject;
     html = (tpl?.html as string) ?? "";
+  }
+
+  // Sem corpo apos os fallbacks: pula o envio (evita e-mail vazio) sem erro.
+  if (!html.trim()) {
+    console.warn("[email] sem conteudo (IA falhou e sem template); envio pulado.");
+    return;
   }
 
   subject = fillPlaceholders(subject, vars);
