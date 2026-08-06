@@ -32,6 +32,21 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "cancelled", reason: "loja inativa" };
   }
 
+  // Reset mensal de cota (idempotente, sem cron): se o periodo (YYYY-MM) mudou
+  // desde a ultima contagem, zera os contadores antes de checar a cota. Sem
+  // isso, toda loja bate a cota no 2o mes e o app para silenciosamente.
+  const periodKey = new Date().toISOString().slice(0, 7); // "2026-08"
+  if (store.quotas.periodKey !== periodKey) {
+    await storeRef(storeId).update({
+      "quotas.periodKey": periodKey,
+      "quotas.dispatchesMonthUsed": 0,
+      "quotas.whatsappMonthUsed": 0,
+    });
+    store.quotas.dispatchesMonthUsed = 0;
+    store.quotas.whatsappMonthUsed = 0;
+    store.quotas.periodKey = periodKey;
+  }
+
   const flow = (await col(storeId, "flows").doc(job.flowId).get()).data() as Flow | undefined;
   const step = flow?.steps[job.stepIndex];
   if (!step) {

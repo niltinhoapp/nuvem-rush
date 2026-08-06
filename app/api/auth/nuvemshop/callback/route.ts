@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
           dispatchesMonthUsed: 0,
           whatsappMonthLimit: PLANS.essencial.whatsappMonthLimit,
           whatsappMonthUsed: 0,
+          periodKey: new Date().toISOString().slice(0, 7),
         },
       },
       { merge: true },

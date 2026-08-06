@@ -19,6 +19,9 @@ export interface Store {
     // Cota de WHATSAPP — separada porque cada mensagem custa ~R$0,33 na Meta.
     whatsappMonthLimit: number;
     whatsappMonthUsed: number;
+    // Periodo (YYYY-MM) a que os contadores acima se referem. Quando vira o
+    // mes, os contadores sao zerados no proximo disparo (ver lib/dispatch.ts).
+    periodKey?: string;
   };
   // Conta de WhatsApp PROPRIA do lojista, conectada via Embedded Signup
   // (modelo Tech Provider: a Meta cobra as mensagens direto do lojista).
