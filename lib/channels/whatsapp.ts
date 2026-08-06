@@ -47,9 +47,13 @@ interface WaCredentials {
   defaultTemplateLang?: string;
 }
 
-// Credenciais POR LOJA (Embedded Signup / Tech Provider): se o lojista
-// conectou a propria conta, usamos o numero e o token DELE — a Meta cobra
-// direto do lojista. Fallback: numero global do Nuvem Rush (env vars).
+// Credenciais POR LOJA (Embedded Signup / Tech Provider): SEMPRE usa o numero
+// e o token DO LOJISTA — a Meta cobra direto dele e a mensagem sai com o nome
+// dele. NAO ha fallback para o numero global: mandar do numero do Nuvem Rush
+// para o cliente final da loja e risco de politica (o consumidor nao reconhece
+// o remetente) e de LGPD. Se a loja nao conectou, o disparo falha com mensagem
+// clara e a UI mostra o botao de conectar. O numero global vive SO no botao de
+// teste (sendTestWhatsapp).
 async function resolveCredentials(storeId: string): Promise<WaCredentials> {
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
   const wa = store?.whatsapp;
@@ -61,15 +65,10 @@ async function resolveCredentials(storeId: string): Promise<WaCredentials> {
       defaultTemplateLang: wa.templateLang,
     };
   }
-
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!phoneNumberId || !accessToken) {
-    throw new Error(
-      "loja sem WhatsApp conectado e sem credenciais globais configuradas",
-    );
-  }
-  return { phoneNumberId, accessToken };
+  throw new Error(
+    "WhatsApp nao conectado nesta loja. Conecte a conta oficial da Meta " +
+      "para ativar este canal.",
+  );
 }
 
 // Normaliza para o formato esperado pela Graph API (digitos, com DDI).
@@ -190,16 +189,19 @@ export async function sendTestWhatsapp(params: {
 }): Promise<void> {
   const { storeId, to } = params;
 
-  // Se WHATSAPP_TEST_PHONE_NUMBER_ID estiver definido (numero de teste da Meta),
-  // o botao de teste usa ele — sem alterar o WHATSAPP_PHONE_NUMBER_ID de
-  // producao. Util para gravar os videos da analise da Meta com o numero
-  // sandbox. Usa o mesmo WHATSAPP_ACCESS_TOKEN (que ja tem acesso a WABA de teste).
-  const testPhoneId = process.env.WHATSAPP_TEST_PHONE_NUMBER_ID;
-  const testToken = process.env.WHATSAPP_ACCESS_TOKEN;
-  const creds =
-    testPhoneId && testToken
-      ? { phoneNumberId: testPhoneId, accessToken: testToken }
-      : await resolveCredentials(storeId);
+  // O botao de teste usa SEMPRE o numero GLOBAL do Nuvem Rush (nunca a conta
+  // do lojista): serve para validar o canal antes da conexao e para gravar os
+  // videos da analise da Meta. Prioriza o numero de teste dedicado, senao o
+  // numero global de producao. Este e o UNICO ponto onde o numero global e
+  // usado (o disparo real, sendWhatsapp, exige a conta do lojista).
+  const phoneNumberId =
+    process.env.WHATSAPP_TEST_PHONE_NUMBER_ID ?? process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!phoneNumberId || !accessToken) {
+    throw new Error("credenciais globais de WhatsApp (teste) nao configuradas");
+  }
+  const creds = { phoneNumberId, accessToken };
+  void storeId; // storeId nao e mais usado aqui (mantido na assinatura da API)
 
   const res = await fetch(
     `https://graph.facebook.com/${GRAPH_VERSION}/${creds.phoneNumberId}/messages`,
