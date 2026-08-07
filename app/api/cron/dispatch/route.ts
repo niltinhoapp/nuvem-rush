@@ -2,15 +2,23 @@
 // (runAt <= agora) e dispara cada um.
 // Protegido pelo CRON_SECRET que a Vercel injeta no header Authorization.
 //
-// Itera as lojas ativas e consulta jobs por loja (equality em status), que usa
-// indice automatico. Evita o indice de collection-group. Para escala (milhares
-// de lojas), migrar para collectionGroup("jobs") + indice composto status+runAt.
+// Itera as lojas ativas e consulta jobs por loja (equality em status, indice
+// automatico). Os jobs sao ORDENADOS por runAt (mais antigos primeiro) e
+// disparados com CONCORRENCIA LIMITADA, para nunca inanir jobs vencidos nem
+// estourar o maxDuration / a Graph API num pico.
+// Para escala (>500 jobs agendados por loja), migrar para collectionGroup
+// + indice composto (status ASC, runAt ASC) e paginacao por runAt.
 import { NextRequest, NextResponse } from "next/server";
 import { db, col } from "@/lib/firebase/admin";
 import { dispatchJob } from "@/lib/dispatch";
 import type { Job } from "@/types";
 
 export const maxDuration = 60; // segundos
+
+// Quantos jobs disparam ao mesmo tempo. Teto para nao estourar o tempo da
+// funcao nem gerar pico contra a Graph API/Resend.
+const CONCURRENCY = 10;
+const PER_STORE_LIMIT = 1000;
 
 export async function GET(req: NextRequest) {
   // Fail-closed: sem CRON_SECRET configurado, recusa (nao expoe o cron).
@@ -28,7 +36,7 @@ export async function GET(req: NextRequest) {
   for (const store of stores.docs) {
     const snap = await col(store.id, "jobs")
       .where("status", "==", "scheduled")
-      .limit(500)
+      .limit(PER_STORE_LIMIT)
       .get();
     scanned += snap.size;
     for (const d of snap.docs) {
@@ -37,18 +45,20 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const results = await Promise.allSettled(
-    due.map((j) => dispatchJob(j.storeId, j.jobId)),
-  );
-  const sent = results.filter(
-    (r) => r.status === "fulfilled" && r.value.status === "sent",
-  ).length;
+  // Vencidos ha mais tempo disparam primeiro (evita inanicao dentro do lote).
+  due.sort((a, b) => a.runAt - b.runAt);
 
-  return NextResponse.json({
-    ok: true,
-    stores: stores.size,
-    scanned,
-    due: due.length,
-    sent,
-  });
+  // Concorrencia limitada: processa em lotes de CONCURRENCY.
+  let sent = 0;
+  for (let i = 0; i < due.length; i += CONCURRENCY) {
+    const batch = due.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map((j) => dispatchJob(j.storeId, j.jobId)),
+    );
+    sent += results.filter(
+      (r) => r.status === "fulfilled" && r.value.status === "sent",
+    ).length;
+  }
+
+  return NextResponse.json({ ok: true, stores: stores.size, scanned, due: due.length, sent });
 }
