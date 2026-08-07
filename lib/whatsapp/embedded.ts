@@ -115,6 +115,13 @@ export async function registerPhoneNumber(
 // Cria o template padrao de pos-venda na WABA DO LOJISTA. A aprovacao pela
 // Meta leva de minutos a 24h; o webhook (message_template_status_update)
 // avisa quando mudar.
+//
+// Categoria UTILITY (nao MARKETING): a mensagem e transacional — confirma um
+// pedido especifico ja realizado. UTILITY custa ~9x menos por mensagem que
+// MARKETING no Brasil (~R$0,04 vs ~R$0,33), e a conta e do lojista. Por isso
+// o texto e puramente sobre o pedido, sem apelo promocional nem "responda SAIR"
+// (opt-out so faz sentido em templates de MARKETING; incluir aqui forcaria a
+// Meta a reclassificar como MARKETING).
 export async function createDefaultTemplate(
   wabaId: string,
   token: string,
@@ -128,14 +135,13 @@ export async function createDefaultTemplate(
     body: JSON.stringify({
       name: DEFAULT_TEMPLATE_NAME,
       language: DEFAULT_TEMPLATE_LANG,
-      category: "MARKETING",
+      category: "UTILITY",
       components: [
         {
           type: "BODY",
           text:
-            "Ola {{1}}! Muito obrigado pela sua compra. Qualquer duvida " +
-            "sobre o pedido, e so responder por aqui. Para nao receber " +
-            "mais mensagens promocionais, responda SAIR.",
+            "Ola {{1}}! Recebemos seu pedido e ja estamos preparando tudo. " +
+            "Qualquer duvida sobre a sua compra, e so responder por aqui.",
           example: { body_text: [["Maria"]] },
         },
       ],
