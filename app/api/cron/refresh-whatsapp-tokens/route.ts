@@ -41,12 +41,27 @@ export async function GET(req: NextRequest) {
       await doc.ref.update({
         "whatsapp.accessToken": newToken, // TODO: criptografar em repouso
         "whatsapp.tokenRefreshedAt": now,
+        // Sucesso: limpa qualquer falha anterior.
+        "whatsapp.lastRefreshError": null,
+        "whatsapp.refreshFailCount": 0,
       });
       refreshed++;
     } catch (err) {
-      // Nao interrompe o lote: as demais lojas ainda devem ser renovadas.
+      // Nao interrompe o lote, mas PERSISTE a falha na loja (visivel na UI e
+      // consultavel) — antes ia so no JSON de resposta, que ninguem le.
+      // Se falhar por ~30 dias seguidos, o token expira e o canal para: com
+      // isto da para alertar/mostrar antes disso.
+      const failCount = (wa.refreshFailCount ?? 0) + 1;
+      await doc.ref.update({
+        "whatsapp.lastRefreshError": String(err),
+        "whatsapp.lastRefreshAttempt": now,
+        "whatsapp.refreshFailCount": failCount,
+      });
       errors.push(`${doc.id}: ${String(err)}`);
-      console.error(`[refresh-whatsapp-tokens] falha na loja ${doc.id}:`, err);
+      console.error(
+        `[refresh-whatsapp-tokens] falha na loja ${doc.id} (tentativa ${failCount}):`,
+        err,
+      );
     }
   }
 
