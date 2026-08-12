@@ -15,7 +15,7 @@ import "@xyflow/react/dist/style.css";
 import { Box, Input, Button, Text, Icon } from "@nimbus-ds/components";
 import { PlusCircleIcon, DisketteIcon, RocketIcon } from "@nimbus-ds/icons";
 import { nodeTypes } from "./nodes";
-import { flowToGraph, graphToFlow } from "@/lib/flows/serialize";
+import { flowToGraph, graphToFlow, removeStepNode, collectOrphanStepIds } from "@/lib/flows/serialize";
 import { sessionToken } from "@/lib/nexo";
 import type { Flow, Step, Trigger } from "@/types";
 
@@ -55,12 +55,15 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
     [setNodes],
   );
 
+  // Remove o step RELIGANDO a cadeia (A->B->C, remover B => A->C). Sem religar,
+  // os steps posteriores virariam orfaos e seriam descartados ao salvar (B1).
   const removeStep = useCallback(
     (id: string) => {
-      setNodes((ns) => ns.filter((n) => n.id !== id));
-      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+      const { nodes: nn, edges: ne } = removeStepNode(nodes, edges, id);
+      setNodes(nn);
+      setEdges(ne);
     },
-    [setNodes, setEdges],
+    [nodes, edges, setNodes, setEdges],
   );
 
   const addStep = useCallback(() => {
@@ -104,6 +107,16 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
   });
 
   async function save(status: Flow["status"]) {
+    // Validacao defensiva: nao salvar/ativar se houver acoes desconectadas do
+    // gatilho — elas seriam perdidas silenciosamente na serializacao (B1).
+    const orphans = collectOrphanStepIds(nodes, edges);
+    if (orphans.length > 0) {
+      setMsg(
+        `Há ${orphans.length} ação(ões) desconectada(s) do gatilho. ` +
+          "Reconecte todas as ações à cadeia antes de salvar.",
+      );
+      return;
+    }
     setSaving(true);
     setMsg("");
     try {

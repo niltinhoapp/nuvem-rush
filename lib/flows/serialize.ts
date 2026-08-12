@@ -74,3 +74,54 @@ export function graphToFlow(nodes: Node[], edges: Edge[]): {
 
   return { trigger, steps };
 }
+
+// Remove um no de step RELIGANDO a cadeia: o antecessor passa a apontar para
+// o sucessor (A->B->C, remover B => A->C). Sem isto, remover um no do meio
+// deixa as edges com um buraco e todos os steps POSTERIORES ficam orfaos —
+// graphToFlow, que percorre a cadeia a partir do trigger, os descarta
+// silenciosamente ao salvar (bug B1). Funcao pura para poder ser testada.
+export function removeStepNode(
+  nodes: Node[],
+  edges: Edge[],
+  id: string,
+): { nodes: Node[]; edges: Edge[] } {
+  const incoming = edges.find((e) => e.target === id);
+  const outgoing = edges.find((e) => e.source === id);
+
+  const nextNodes = nodes.filter((n) => n.id !== id);
+  let nextEdges = edges.filter((e) => e.source !== id && e.target !== id);
+
+  // So religa quando havia antecessor E sucessor (no do meio). Ao remover o
+  // primeiro, o trigger passa a apontar para o proximo; ao remover o ultimo,
+  // nao ha sucessor e nada precisa ser religado.
+  if (incoming && outgoing) {
+    nextEdges = [
+      ...nextEdges,
+      {
+        id: `e-${incoming.source}-${outgoing.target}`,
+        source: incoming.source,
+        target: outgoing.target,
+      },
+    ];
+  }
+
+  return { nodes: nextNodes, edges: nextEdges };
+}
+
+// Validacao defensiva: IDs de nos de step que NAO fazem parte da cadeia linear
+// a partir do trigger (orfaos). Usado antes de salvar/ativar para BLOQUEAR o
+// salvamento em vez de perder acoes em silencio.
+export function collectOrphanStepIds(nodes: Node[], edges: Edge[]): string[] {
+  const nextOf = new Map(edges.map((e) => [e.source, e.target]));
+  const visited = new Set<string>();
+  let cursor = nextOf.get(TRIGGER_ID);
+  const guard = new Set<string>();
+  while (cursor && !guard.has(cursor)) {
+    guard.add(cursor);
+    visited.add(cursor);
+    cursor = nextOf.get(cursor);
+  }
+  return nodes
+    .filter((n) => n.type === "step" && !visited.has(n.id))
+    .map((n) => n.id);
+}
