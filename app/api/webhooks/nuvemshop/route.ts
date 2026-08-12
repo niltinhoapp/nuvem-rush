@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyHmac } from "@/lib/nuvemshop/webhooks";
 import { storeRef, col } from "@/lib/firebase/admin";
 import { handleOrderEvent } from "@/lib/rules/process";
+import { eventKey } from "@/lib/webhooks/idempotency";
+import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -53,12 +55,33 @@ export async function POST(req: NextRequest) {
     case "order/paid":
     case "order/created":
     case "order/fulfilled":
-    case "order/cancelled":
+    case "order/cancelled": {
       // order/fulfilled: pedido enviado -> sincroniza rastreio e dispara
       // fluxos com gatilho "pedido enviado" (ex.: rastreio no WhatsApp).
       // order/cancelled: cancela enrollments/jobs pendentes desse pedido.
-      await handleOrderEvent(storeId, String(payload.id), payload.event);
+      //
+      // Idempotencia (B2): a Nuvemshop reentrega webhooks. Sem dedup, cada
+      // reentrega de order/paid criava enrollments/jobs duplicados -> mensagens
+      // em dobro. Reivindica o evento de forma ATOMICA (create-if-not-exists);
+      // duplicata (inclusive concorrente) vira no-op. Se o processamento falhar,
+      // libera a reivindicacao e responde 500 para a Nuvemshop reentregar.
+      if (payload.id == null) {
+        return NextResponse.json({ error: "evento de pedido sem id" }, { status: 400 });
+      }
+      const key = eventKey(payload.event, payload.id);
+      const first = await firestoreEventClaim.claim(storeId, key);
+      if (!first) {
+        return NextResponse.json({ ok: true, deduped: true });
+      }
+      try {
+        await handleOrderEvent(storeId, String(payload.id), payload.event);
+      } catch (err) {
+        await firestoreEventClaim.release(storeId, key);
+        console.error("[webhook nuvemshop] falha ao processar", key, err);
+        return NextResponse.json({ error: "falha ao processar" }, { status: 500 });
+      }
       break;
+    }
 
     default:
       await col(storeId, "logs").add({
