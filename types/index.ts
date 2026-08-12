@@ -177,5 +177,10 @@ export interface Job {
   // Estado intermediario que impede que dois crons/workers disparem o mesmo job.
   status: "scheduled" | "processing" | "sent" | "failed" | "cancelled";
   claimedAt?: number; // quando o job foi reivindicado (scheduled -> processing)
+  // Retry (Fase E): tentativas ja feitas, ultimo erro e proxima tentativa
+  // (backoff). Em retry o job volta a "scheduled" com runAt = nextAttemptAt.
+  attempts?: number;
+  lastError?: string;
+  nextAttemptAt?: number;
   cloudTaskName?: string;
 }

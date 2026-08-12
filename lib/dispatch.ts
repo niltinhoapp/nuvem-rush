@@ -7,6 +7,7 @@ import { sendWhatsapp } from "@/lib/channels/whatsapp";
 import { applyTag } from "@/lib/channels/tag";
 import { triggerWebhook } from "@/lib/channels/webhook";
 import { canClaim, quotaUsageField, hasQuota } from "@/lib/dispatch/claim";
+import { planRetry } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 
 export type DispatchResult =
@@ -81,6 +82,10 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "cancelled", reason: "quota do canal esgotada" };
   }
 
+  // APENAS o envio fica no try que dispara retry. O bookkeeping pos-sucesso
+  // (marcar "sent", cota, log) fica FORA: se ele falhar depois de a mensagem
+  // ja ter saido, o job permanece "processing" e NUNCA e reenviado — evitar
+  // duplicata e mais importante do que o contador ficar perfeito.
   try {
     if (step.action === "email") {
       await sendEmail({ storeId, enrollmentId: job.enrollmentId, step });
@@ -95,22 +100,42 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
       // marcar como "enviado" silenciosamente.
       throw new Error(`acao "${step.action}" nao implementada`);
     }
-
-    await jobRef.update({ status: "sent" });
-    // Incremento ATOMICO da cota (B6): FieldValue.increment evita o
-    // read-modify-write concorrente (lost updates) do codigo anterior.
-    await storeRef(storeId).update({
-      [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
-    });
-    await col(storeId, "logs").add({
-      jobId, channel: step.action, status: "sent", at: Date.now(),
-    });
-    return { ok: true, status: "sent" };
   } catch (err) {
-    await jobRef.update({ status: "failed" });
+    // Falha de ENVIO: decide retry (transitorio) x falha terminal (permanente
+    // ou tentativas esgotadas). Retry volta o job para "scheduled" com runAt no
+    // futuro (backoff) — o cron ja filtra por runAt, entao nada mais muda.
+    const plan = planRetry(job.attempts ?? 0, err, Date.now());
+    if (plan.retry) {
+      await jobRef.update({
+        status: "scheduled",
+        runAt: plan.nextAttemptAt,
+        attempts: plan.attempts,
+        lastError: String(err),
+        nextAttemptAt: plan.nextAttemptAt,
+      });
+      await col(storeId, "logs").add({
+        jobId, channel: step.action, status: "retry",
+        attempt: plan.attempts, error: String(err), at: Date.now(),
+      });
+      return { ok: true, status: "failed", reason: `retry #${plan.attempts}: ${String(err)}` };
+    }
+    await jobRef.update({ status: "failed", attempts: plan.attempts, lastError: String(err) });
     await col(storeId, "logs").add({
-      jobId, channel: step.action, status: "failed", error: String(err), at: Date.now(),
+      jobId, channel: step.action, status: "failed",
+      attempt: plan.attempts, error: String(err), at: Date.now(),
     });
     return { ok: true, status: "failed", reason: String(err) };
   }
+
+  // Envio confirmado. A partir daqui NAO ha retry (nao reenviar).
+  await jobRef.update({ status: "sent" });
+  // Incremento ATOMICO da cota (B6): FieldValue.increment evita o
+  // read-modify-write concorrente (lost updates) do codigo anterior.
+  await storeRef(storeId).update({
+    [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
+  });
+  await col(storeId, "logs").add({
+    jobId, channel: step.action, status: "sent", at: Date.now(),
+  });
+  return { ok: true, status: "sent" };
 }
