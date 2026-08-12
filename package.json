@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-rules.ts && tsx scripts/test-auth.ts && tsx scripts/test-serialize.ts && tsx scripts/test-idempotency.ts"
+    "test": "tsx scripts/test-rules.ts && tsx scripts/test-auth.ts && tsx scripts/test-serialize.ts && tsx scripts/test-idempotency.ts && tsx scripts/test-dispatch.ts"
   },
   "dependencies": {
     "@google-cloud/tasks": "^6.2.3",

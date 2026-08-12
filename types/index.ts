@@ -173,6 +173,9 @@ export interface Job {
   stepIndex: number;
   channel: ActionType;
   runAt: number;
-  status: "scheduled" | "sent" | "failed" | "cancelled";
+  // "processing": reivindicado por um worker (claim atomico) e ainda em envio.
+  // Estado intermediario que impede que dois crons/workers disparem o mesmo job.
+  status: "scheduled" | "processing" | "sent" | "failed" | "cancelled";
+  claimedAt?: number; // quando o job foi reivindicado (scheduled -> processing)
   cloudTaskName?: string;
 }

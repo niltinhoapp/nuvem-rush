@@ -1,10 +1,12 @@
 // Logica de disparo de um job (revalida, envia pelo canal, registra log).
 // Reutilizada pelo cron da Vercel e pelo endpoint /api/dispatch.
-import { col, storeRef } from "@/lib/firebase/admin";
+import { FieldValue } from "firebase-admin/firestore";
+import { db, col, storeRef } from "@/lib/firebase/admin";
 import { sendEmail } from "@/lib/channels/email";
 import { sendWhatsapp } from "@/lib/channels/whatsapp";
 import { applyTag } from "@/lib/channels/tag";
 import { triggerWebhook } from "@/lib/channels/webhook";
+import { canClaim, quotaUsageField, hasQuota } from "@/lib/dispatch/claim";
 import type { Job, Flow, Store } from "@/types";
 
 export type DispatchResult =
@@ -12,11 +14,22 @@ export type DispatchResult =
 
 export async function dispatchJob(storeId: string, jobId: string): Promise<DispatchResult> {
   const jobRef = col(storeId, "jobs").doc(jobId);
-  const jobSnap = await jobRef.get();
-  if (!jobSnap.exists) return { ok: true, status: "skipped", reason: "job inexistente" };
 
-  const job = jobSnap.data() as Job;
-  if (job.status !== "scheduled") return { ok: true, status: "skipped", reason: "ja processado" };
+  // Claim ATOMICO (B3): transacao compare-and-set scheduled -> processing.
+  // Garante que dois crons/workers concorrentes nunca disparem o MESMO job:
+  // apenas a transacao que le "scheduled" consegue escrever "processing"; a
+  // outra le "processing" e desiste. Jobs ja processados (sent/failed/cancelled)
+  // ou em processamento tambem sao ignorados.
+  const claim = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(jobRef);
+    if (!snap.exists) return { ok: false as const, reason: "job inexistente" };
+    const j = snap.data() as Job;
+    if (!canClaim(j.status)) return { ok: false as const, reason: "ja processado" };
+    tx.update(jobRef, { status: "processing", claimedAt: Date.now() });
+    return { ok: true as const, job: j };
+  });
+  if (!claim.ok) return { ok: true, status: "skipped", reason: claim.reason };
+  const job = claim.job;
 
   // Revalidacoes: enrollment ativo?
   const enroll = await col(storeId, "enrollments").doc(job.enrollmentId).get();
@@ -63,7 +76,7 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   const quotaLimit = isWhatsapp
     ? (store.quotas.whatsappMonthLimit ?? 0)
     : store.quotas.dispatchesMonthLimit;
-  if (quotaUsed >= quotaLimit) {
+  if (!hasQuota(quotaUsed, quotaLimit)) {
     await jobRef.update({ status: "cancelled" });
     return { ok: true, status: "cancelled", reason: "quota do canal esgotada" };
   }
@@ -84,11 +97,11 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     }
 
     await jobRef.update({ status: "sent" });
-    await storeRef(storeId).update(
-      isWhatsapp
-        ? { "quotas.whatsappMonthUsed": (store.quotas.whatsappMonthUsed ?? 0) + 1 }
-        : { "quotas.dispatchesMonthUsed": store.quotas.dispatchesMonthUsed + 1 },
-    );
+    // Incremento ATOMICO da cota (B6): FieldValue.increment evita o
+    // read-modify-write concorrente (lost updates) do codigo anterior.
+    await storeRef(storeId).update({
+      [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
+    });
     await col(storeId, "logs").add({
       jobId, channel: step.action, status: "sent", at: Date.now(),
     });
