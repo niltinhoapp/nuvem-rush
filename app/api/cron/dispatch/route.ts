@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, col } from "@/lib/firebase/admin";
 import { dispatchJob } from "@/lib/dispatch";
+import { isJobDue } from "@/lib/dispatch/claim";
 import type { Job } from "@/types";
 
 export const maxDuration = 60; // segundos
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     scanned += snap.size;
     for (const d of snap.docs) {
       const job = d.data() as Job;
-      if (job.runAt <= now) due.push(job);
+      if (isJobDue(job.runAt, now)) due.push(job);
     }
   }
 

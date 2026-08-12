@@ -19,6 +19,13 @@ export function hasQuota(used: number, limit: number): boolean {
   return used < limit;
 }
 
+// Um job so e "vencido" (elegivel para disparo pelo cron) quando runAt <= now.
+// Como o retry reagenda o job com runAt = nextAttemptAt (futuro), esta mesma
+// funcao garante que a proxima tentativa so ocorre apos o backoff.
+export function isJobDue(runAt: number, now: number): boolean {
+  return runAt <= now;
+}
+
 // Store de jobs em memoria com claim ATOMICO (secao critica sincrona),
 // espelhando a garantia da transacao do Firestore. Usada nos testes de
 // concorrencia (dois workers tentando o mesmo job).
