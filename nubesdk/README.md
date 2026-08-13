@@ -5,26 +5,32 @@ Camada **exclusiva de storefront/checkout**, separada do painel Admin
 isolado**: sem `window`/`document`/DOM/jQuery/React.
 
 ## O que faz
-Observa eventos oficiais do NubeSDK e emite um **sinal mínimo** (sem PII) ao
-backend quando o checkout inicia ou a compra conclui. **Não** envia mensagem,
-**não** altera carrinho/preço/frete, **não** bloqueia checkout. O abandono é
-decidido **server-side**.
+Observa eventos oficiais do NubeSDK e emite um **sinal mínimo** (sem PII, sem
+segredo) ao backend. **Não** envia mensagem, **não** altera carrinho/preço/frete,
+**não** bloqueia checkout. Toda autoridade é **server-side** (resolve a loja pela
+API oficial, usa relógio próprio, confirma conclusão via API/webhook).
 
-- Entry point: `export function App(nube: NubeSDK)` em `src/main.ts`.
-- Estado: reutiliza a máquina pura em `../lib/storefront/cartState.ts`.
-- Eventos: `page:loaded`, `cart:update`, `cart:view`, `checkout:ready`,
-  `customer:update`, `checkout:success`, `order:update`.
+- Entry point oficial: `export const App: NubeApp` em `src/main.ts`.
+- Tipos oficiais: `@tiendanube/nube-sdk-types` (v0.5.0).
+- Estado: reutiliza a máquina pura `../lib/storefront/cartState.ts`.
+- Eventos **listenable** oficiais usados: `cart:update`, `checkout:ready`,
+  `customer:update`, `shipping:update`, `payment:update`, `checkout:success`.
+  (page:loaded / cart:view / order:update NÃO são listenable na v0.5.0.)
 
-## Pendências de empacotamento (Fase 9 — manuais, NÃO feitas aqui)
-1. **Instalar** os pacotes oficiais (`@tiendanube/nube-sdk-types`, e `-ui`/`-jsx`
-   se necessário) e **substituir** `src/nube-sdk.shim.ts` pelos tipos oficiais.
-2. **Bundle** do worker (via `create-nube-app`/DevTools oficiais), definindo a
-   constante `CART_SIGNAL_ENDPOINT` (URL pública do backend). **Nenhum segredo**
-   entra no bundle.
-3. **Associar** o script ao app e **testar em loja demo** com a tag SDK
-   (ver `docs/NUBESDK_DEMO_VALIDATION_CHECKLIST.md`).
-4. Marcar **"Uses NubeSDK"** apenas após validação real.
+## Build / Local Mode (oficial, tsup)
+```bash
+cd nubesdk
+npm install
+npm run build      # gera dist/main.min.js (tsup, minificado)
+npm run dev        # watch + serve em http://localhost:8080
+```
+- Bundle: **`dist/main.min.js`** — URL de Local Mode: `http://localhost:8080/main.min.js`.
+- O **NubeSDK DevTools** (extensão Chrome) carrega essa URL na loja de teste.
+- `CART_SIGNAL_ENDPOINT` é injetado em build-time (env), **sem segredo**.
 
-> Estas etapas dependem de detalhes de build/publicação da doc oficial que não
-> estão totalmente enumerados publicamente; confirmar no `create-nube-app`/DevTools
-> no momento do empacotamento.
+## Pendências MANUAIS (Portal — NÃO feitas aqui)
+1. Scaffold de referência: `npm create nube-app@latest` (já replicado nesta pasta).
+2. **Associar** o script/bundle ao app no fluxo oficial de publicação.
+3. **Solicitar a tag/flag SDK** para a loja de teste.
+4. **Validar** storefront + checkout (ver `docs/NUBESDK_DEMO_VALIDATION_CHECKLIST.md`).
+5. Marcar **"Uses NubeSDK"** SOMENTE após validação real.

@@ -1,16 +1,16 @@
-// Validação e chaves do sinal de carrinho (PURO/testável). O sinal chega do
-// Web Worker do storefront e é tratado como UNTRUSTED INPUT.
+// Validação e chaves do sinal de carrinho (PURO/testável). Sinal = UNTRUSTED.
 import { z } from "zod";
 import { eventKey } from "@/lib/webhooks/idempotency";
 
-// Sinal MÍNIMO (LGPD): sem e-mail/telefone/nome/endereço. `.strict()` rejeita
-// campos extras (não aceitar PII "clandestina" nem lixo).
+// Sinal MÍNIMO. `.strict()` rejeita campos extras (não aceitar PII clandestina).
+// storeId/clientAt são TELEMETRIA opcional — o backend usa relógio próprio e
+// resolve a loja via API (nunca confia neles).
 export const cartSignalSchema = z
   .object({
-    storeId: z.string().min(1).max(64),
     cartId: z.string().min(1).max(128),
-    phase: z.enum(["CHECKOUT_STARTED", "COMPLETED"]),
-    at: z.number().int().positive(),
+    phase: z.enum(["ACTIVITY", "CHECKOUT_STARTED", "COMPLETED"]),
+    clientAt: z.number().int().positive().optional(),
+    storeId: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -27,8 +27,8 @@ export function parseCartSignal(
   };
 }
 
-// Chave de deduplicação de INSCRIÇÃO por carrinho — compartilhada entre o sinal
-// do NubeSDK e o polling, reutilizando o padrão de idempotência atômica do P0.
+// Chave de dedup de INSCRIÇÃO por carrinho — compartilhada entre sinal e polling,
+// reutilizando o padrão de idempotência atômica do P0.
 export function cartEnrollKey(cartId: string): string {
   return eventKey("cart_enroll", cartId);
 }

@@ -1,37 +1,41 @@
-// Maquina de estados do carrinho/checkout (PURA — sem window/document/DOM/React).
-// Usada pelo modulo NubeSDK (storefront) e pelos testes. NAO decide abandono:
-// abandono e determinado SERVER-SIDE apos inatividade (ver lib/storefront/cartSignal.ts).
+// Máquina de estados do carrinho/checkout (PURA — sem window/document/DOM/React).
+// Roda no Web Worker (storefront) e nos testes. NÃO tem autoridade: apenas emite
+// SINAIS ao backend. Toda decisão (loja dona, timeout, COMPLETED, terminal) é
+// SERVER-SIDE (ver lib/storefront/signalDoc.ts).
 //
-// Fases (client-side): ACTIVE -> CHECKOUT_STARTED -> COMPLETED.
-// ABANDONED nunca e definido no cliente.
+// Fases locais: ACTIVE -> CHECKOUT_STARTED -> COMPLETED (terminal local só para
+// reduzir ruído; a verdade é do servidor).
 
 export type CartPhase = "ACTIVE" | "CHECKOUT_STARTED" | "COMPLETED";
 
-// Eventos oficiais do NubeSDK que o modulo escuta (grafia confirmada na doc).
+// Eventos LISTENABLE oficiais do NubeSDK (v0.5.0) usados pelo módulo.
+// (page:loaded / cart:view / order:update NÃO são listenable — não usar.)
 export type NubeCartEvent =
-  | "page:loaded"
   | "cart:update"
-  | "cart:view"
   | "checkout:ready"
   | "customer:update"
-  | "checkout:success"
-  | "order:update";
+  | "shipping:update"
+  | "payment:update"
+  | "checkout:success";
 
-// Fase que o SINAL carrega ao backend (mínimo). Nunca ABANDONED (é server-side).
-export type SignalPhase = "CHECKOUT_STARTED" | "COMPLETED";
+// Fase que o SINAL carrega. ACTIVITY renova atividade server-side; COMPLETED é
+// apenas HINT (o servidor confirma via API/webhook, nunca confia no browser).
+export type SignalPhase = "ACTIVITY" | "CHECKOUT_STARTED" | "COMPLETED";
 
 export interface CartMachine {
   phase: CartPhase | null;
   hasContact: boolean;
-  lastActivityAt: number;
+  lastActivityAt: number; // relógio do cliente — só telemetria; servidor ignora
 }
 
-// Sinal MÍNIMO enviado ao backend (LGPD): sem e-mail/telefone/nome/endereço.
+// Sinal MÍNIMO (LGPD): sem PII. `storeId` é TELEMETRIA (o backend nunca o usa
+// para selecionar a loja — ver signalDoc.storeOwnsCheckout). `clientAt` também
+// é só telemetria; o backend usa o próprio relógio (receivedAt).
 export interface CartSignal {
-  storeId: string;
   cartId: string;
   phase: SignalPhase;
-  at: number;
+  clientAt: number;
+  storeId?: string;
 }
 
 export interface ReduceCtx {
@@ -44,79 +48,62 @@ export interface ReduceCtx {
 
 export interface ReduceResult {
   state: CartMachine;
-  signal?: CartSignal; // presente só quando há algo a comunicar ao backend
+  signal?: CartSignal;
 }
 
 export function initCartMachine(): CartMachine {
   return { phase: null, hasContact: false, lastActivityAt: 0 };
 }
 
-// Timeout de inatividade para o backend considerar ABANDONO (30 min). Só é
-// aplicado SERVER-SIDE: o worker morre ao fechar a aba, então quem arma o
-// tempo é o backend (ver app/api/cron/cart-signals).
-export const CART_ABANDON_TIMEOUT_MS = 30 * 60_000;
-
-// Decisão SERVER-SIDE: um checkout iniciado, não concluído, sem atividade há
-// mais que o timeout, é candidato a recuperação. COMPLETED nunca é candidato.
-export function isAbandonedCandidate(
-  phase: SignalPhase | "COMPLETED" | null,
-  lastEventAt: number,
-  now: number,
-  completed: boolean,
-  timeoutMs: number = CART_ABANDON_TIMEOUT_MS,
-): boolean {
-  if (completed || phase === "COMPLETED") return false;
-  if (phase !== "CHECKOUT_STARTED") return false;
-  return now - lastEventAt >= timeoutMs;
-}
-
-// Reduz um evento do NubeSDK ao próximo estado + (opcional) sinal ao backend.
-export function reduceCart(
-  state: CartMachine,
-  event: NubeCartEvent,
-  ctx: ReduceCtx,
-): ReduceResult {
-  // Terminal: uma vez COMPLETED, nada reabilita recuperação (nunca vira ABANDONED).
+export function reduceCart(state: CartMachine, event: NubeCartEvent, ctx: ReduceCtx): ReduceResult {
+  // Terminal local: uma vez COMPLETED, para de emitir (o servidor já decide).
   if (state.phase === "COMPLETED") return { state };
 
   const activity: CartMachine = { ...state, lastActivityAt: ctx.now };
+  const sig = (phase: SignalPhase): CartSignal => ({
+    cartId: ctx.cartId,
+    phase,
+    clientAt: ctx.now,
+    storeId: ctx.storeId, // telemetria apenas
+  });
 
   switch (event) {
-    // Compra concluída -> COMPLETED + sinal (backend cancela recuperação).
+    // Compra concluída -> HINT COMPLETED (o servidor confirma via API/webhook;
+    // nunca encerra só porque o browser disse).
     case "checkout:success":
-    case "order:update":
-      return {
-        state: { ...activity, phase: "COMPLETED" },
-        signal: { storeId: ctx.storeId, cartId: ctx.cartId, phase: "COMPLETED", at: ctx.now },
-      };
+      return { state: { ...activity, phase: "COMPLETED" }, signal: sig("COMPLETED") };
 
-    // Checkout iniciado -> CHECKOUT_STARTED. Emite sinal SÓ na 1ª transição
-    // (idempotente: checkout:ready repetido não reenvia).
+    // Checkout iniciado -> CHECKOUT_STARTED na 1ª vez; repetição vira ACTIVITY
+    // (renova atividade server-side — bloqueador 5).
     case "checkout:ready": {
-      const next: CartMachine = {
-        ...activity,
-        phase: "CHECKOUT_STARTED",
-        hasContact: ctx.hasContact || activity.hasContact,
-      };
       const firstTime = state.phase !== "CHECKOUT_STARTED";
-      return firstTime
-        ? { state: next, signal: { storeId: ctx.storeId, cartId: ctx.cartId, phase: "CHECKOUT_STARTED", at: ctx.now } }
-        : { state: next };
+      const next: CartMachine = { ...activity, phase: "CHECKOUT_STARTED", hasContact: ctx.hasContact || state.hasContact };
+      return { state: next, signal: firstTime ? sig("CHECKOUT_STARTED") : sig("ACTIVITY") };
     }
 
-    // Contato identificado -> só atualiza sinal local; NÃO dispara mensagem.
-    case "customer:update":
-      return { state: { ...activity, hasContact: true } };
-
-    // Atividade do carrinho -> NÃO é abandono, NÃO emite sinal.
-    case "cart:update":
-    case "cart:view":
+    // Frete/pagamento atualizados durante o checkout -> forte intenção; renova
+    // atividade (ACTIVITY) e garante reachedCheckout se ainda não marcado.
+    case "shipping:update":
+    case "payment:update":
       return {
-        state: { ...activity, phase: activity.phase ?? (ctx.hasItems ? "ACTIVE" : activity.phase) },
+        state: { ...activity, phase: activity.phase === "CHECKOUT_STARTED" ? "CHECKOUT_STARTED" : activity.phase },
+        signal: sig("ACTIVITY"),
       };
 
-    // Carregamento de página / demais -> só marca atividade.
-    case "page:loaded":
+    // Atividade do carrinho -> renova atividade (ACTIVITY). NÃO é abandono.
+    case "cart:update":
+      return {
+        state: { ...activity, phase: activity.phase ?? (ctx.hasItems ? "ACTIVE" : activity.phase) },
+        signal: ctx.hasItems ? sig("ACTIVITY") : undefined,
+      };
+
+    // Contato identificado -> renova atividade se já no checkout; sem mensagem.
+    case "customer:update":
+      return {
+        state: { ...activity, hasContact: true },
+        signal: state.phase === "CHECKOUT_STARTED" ? sig("ACTIVITY") : undefined,
+      };
+
     default:
       return { state: activity };
   }

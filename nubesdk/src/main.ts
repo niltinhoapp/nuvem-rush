@@ -2,63 +2,70 @@
 // Roda em Web Worker isolado. PROIBIDO: window, document, DOM, jQuery, React,
 // innerHTML. Usa somente APIs oficiais do NubeSDK + `fetch` nativo.
 //
-// Responsabilidade ÚNICA: observar eventos de cart/checkout, manter a máquina
-// de estados e emitir um SINAL MÍNIMO ao backend (sem PII). NÃO envia
-// WhatsApp/e-mail, NÃO altera carrinho/preço/frete, NÃO bloqueia checkout.
-// O abandono é decidido SERVER-SIDE; a compra concluída cancela recuperação.
+// Responsabilidade ÚNICA: observar eventos de cart/checkout e emitir SINAIS
+// MÍNIMOS (sem PII, sem segredo) ao backend. NÃO envia WhatsApp/e-mail, NÃO
+// altera carrinho/preço/frete, NÃO bloqueia checkout. O backend é a autoridade:
+// resolve a loja pela API oficial, usa relógio próprio e confirma conclusão.
 //
-// Entry point oficial: export function App(nube: NubeSDK).
+// Entry point oficial: export const App: NubeApp.
 import { reduceCart, initCartMachine, type NubeCartEvent } from "../../lib/storefront/cartState";
-import type { NubeSDK, NubeSDKState } from "./nube-sdk.shim";
+import type { NubeApp, NubeSDK, NubeSDKState } from "@tiendanube/nube-sdk-types";
 
-// Definido no empacotamento (build do worker). Sem segredo — endpoint público
-// que trata o sinal como UNTRUSTED e reconfirma tudo server-side.
+// Injetado no bundle (tsup/DevTools). Sem segredo — endpoint público, sinal
+// tratado como UNTRUSTED e reconfirmado server-side.
 declare const CART_SIGNAL_ENDPOINT: string | undefined;
 
+// Eventos LISTENABLE oficiais do NubeSDK (v0.5.0).
 const EVENTS: NubeCartEvent[] = [
-  "page:loaded",
   "cart:update",
-  "cart:view",
   "checkout:ready",
   "customer:update",
+  "shipping:update",
+  "payment:update",
   "checkout:success",
-  "order:update",
 ];
 
-export function App(nube: NubeSDK): void {
+// Throttle de sinais de ATIVIDADE (renovam lastActivityAt no servidor). Sinais
+// CHECKOUT_STARTED e COMPLETED são sempre enviados; ACTIVITY no máx. a cada 60s.
+const ACTIVITY_THROTTLE_MS = 60_000;
+
+export const App: NubeApp = (nube: NubeSDK) => {
   let machine = initCartMachine();
+  let lastActivitySentAt = 0;
   const endpoint =
-    typeof CART_SIGNAL_ENDPOINT === "string" && CART_SIGNAL_ENDPOINT
-      ? CART_SIGNAL_ENDPOINT
-      : "";
+    typeof CART_SIGNAL_ENDPOINT === "string" && CART_SIGNAL_ENDPOINT ? CART_SIGNAL_ENDPOINT : "";
 
   for (const event of EVENTS) {
     nube.on(event, (state: NubeSDKState) => {
       const storeId = String(state.store?.id ?? "");
       const cartId = String(state.cart?.id ?? "");
-      if (!storeId || !cartId) return; // sem contexto suficiente: ignora
+      if (!cartId) return; // sem carrinho: nada a sinalizar
 
+      const now = Date.now();
       const { state: next, signal } = reduceCart(machine, event, {
         storeId,
         cartId,
         hasItems: (state.cart?.items?.length ?? 0) > 0,
         hasContact: Boolean(state.customer),
-        now: Date.now(),
+        now,
       });
       machine = next;
+      if (!signal || !endpoint) return;
 
-      if (signal && endpoint) {
-        // `fetch` nativo do Web Worker. keepalive p/ sobreviver à navegação.
-        // Corpo = sinal MÍNIMO (storeId, cartId, phase, at) — sem PII, sem segredo.
-        void fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(signal),
-          keepalive: true,
-        }).catch(() => {
-          // Falha do sinal NÃO quebra a loja; o polling server-side é fallback.
-        });
+      // Throttle apenas de ACTIVITY (evita flood de cart:update).
+      if (signal.phase === "ACTIVITY") {
+        if (now - lastActivitySentAt < ACTIVITY_THROTTLE_MS) return;
+        lastActivitySentAt = now;
       }
+
+      void fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(signal),
+        keepalive: true,
+      }).catch(() => {
+        // Falha do sinal NÃO quebra a loja; o polling server-side é fallback.
+      });
     });
   }
-}
+};
