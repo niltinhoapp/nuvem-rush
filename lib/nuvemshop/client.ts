@@ -17,7 +17,7 @@ export class NuvemshopClient {
       ...init,
       headers: {
         Authentication: `bearer ${this.accessToken}`,
-        "User-Agent": process.env.NUVEMSHOP_USER_AGENT ?? "Nuvem Rush",
+        "User-Agent": process.env.NUVEMSHOP_USER_AGENT ?? "Nuvem Rush (csinput@gmail.com)",
         "Content-Type": "application/json",
         ...init.headers,
       },
