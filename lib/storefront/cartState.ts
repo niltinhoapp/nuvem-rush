@@ -28,14 +28,16 @@ export interface CartMachine {
   lastActivityAt: number; // relógio do cliente — só telemetria; servidor ignora
 }
 
-// Sinal MÍNIMO (LGPD): sem PII. `storeId` é TELEMETRIA (o backend nunca o usa
-// para selecionar a loja — ver signalDoc.storeOwnsCheckout). `clientAt` também
-// é só telemetria; o backend usa o próprio relógio (receivedAt).
+// Sinal MÍNIMO (LGPD): sem PII. `storeId`/`storeDomain` são derivados do NubeSDK
+// State (store.id / store.domain) mas continuam UNTRUSTED no backend (a autoridade
+// é a Origin + a API oficial). `clientAt` é só telemetria; o backend usa o próprio
+// relógio (receivedAt).
 export interface CartSignal {
+  storeId: string;
   cartId: string;
   phase: SignalPhase;
   clientAt: number;
-  storeId?: string;
+  storeDomain?: string;
 }
 
 export interface ReduceCtx {
@@ -44,6 +46,7 @@ export interface ReduceCtx {
   hasItems: boolean;
   hasContact: boolean;
   now: number;
+  storeDomain?: string;
 }
 
 export interface ReduceResult {
@@ -61,10 +64,11 @@ export function reduceCart(state: CartMachine, event: NubeCartEvent, ctx: Reduce
 
   const activity: CartMachine = { ...state, lastActivityAt: ctx.now };
   const sig = (phase: SignalPhase): CartSignal => ({
+    storeId: ctx.storeId, // derivado de store.id; UNTRUSTED no backend
     cartId: ctx.cartId,
     phase,
     clientAt: ctx.now,
-    storeId: ctx.storeId, // telemetria apenas
+    storeDomain: ctx.storeDomain, // derivado de store.domain; UNTRUSTED
   });
 
   switch (event) {

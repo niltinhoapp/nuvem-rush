@@ -34,8 +34,17 @@ export function isAllowedOrigin(origin: string | null, suffixes: string[] = allo
 
 export function corsHeaders(origin: string | null): Record<string, string> {
   if (!isAllowedOrigin(origin)) return {};
+  return corsHeadersFor(origin);
+}
+
+// Reflete uma origem específica. Usado (a) no preflight OPTIONS — que NÃO é a
+// fronteira de segurança (a validação real, tenant-origin, ocorre no POST) e
+// precisa liberar inclusive domínios próprios da loja; e (b) na resposta do POST
+// após a origem já ter sido validada contra os domínios da loja.
+export function corsHeadersFor(origin: string | null): Record<string, string> {
+  if (!origin) return {};
   return {
-    "Access-Control-Allow-Origin": origin as string,
+    "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",

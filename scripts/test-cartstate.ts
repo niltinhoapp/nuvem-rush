@@ -47,11 +47,11 @@ const step = (state: CartMachine, event: NubeCartEvent, over = {}) => reduceCart
   const after = step(r.state, "cart:update");
   check("COMPLETED terminal local (não reemite)", after.signal === undefined && after.state.phase === "COMPLETED");
 }
-// sinal nunca carrega PII (só cartId/phase/clientAt/storeId).
+// sinal nunca carrega PII (só storeId/cartId/phase/clientAt/storeDomain).
 {
-  const r = step(initCartMachine(), "checkout:ready");
+  const r = step(initCartMachine(), "checkout:ready", { storeDomain: "loja.x" });
   const keys = Object.keys(r.signal ?? {}).sort().join(",");
-  check("sinal só tem cartId,clientAt,phase,storeId", keys === "cartId,clientAt,phase,storeId");
+  check("sinal só tem campos técnicos (sem PII)", keys === "cartId,clientAt,phase,storeDomain,storeId");
 }
 
 console.log(`\n${pass} passaram, ${fail} falharam`);

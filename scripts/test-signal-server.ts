@@ -3,7 +3,6 @@ import {
   reduceSignalDoc,
   isAbandonedServer,
   storeOwnsCheckout,
-  signalKey,
   CART_ABANDON_TIMEOUT_MS,
   type SignalDoc,
 } from "../lib/storefront/signalDoc";
@@ -19,17 +18,12 @@ const base = (over: Partial<SignalDoc>): SignalDoc => ({
   reachedCheckout: true, clientCompleted: false, status: "pending", ...over,
 });
 
-// ===== Bloqueador 1: identidade COMPOSTA store-scoped (sem colisão) =====
+// ===== Bloqueador 1: posse confirmada por API (identidade store-scoped) =====
 {
-  check("1 mesmo cartId em 2 lojas => chaves distintas", signalKey("A", "123") !== signalKey("B", "123"));
-  check("1 signalKey determinística", signalKey("A", "123") === signalKey("A", "123"));
-  check("1 signalKey sanitiza / e :", !signalKey("a/b", "c:d").slice(signalKey("a/b", "").length).includes("/"));
   const storeA = new Set<string>(["A1", "A2"]);
   const storeB = new Set<string>(["123"]);
   check("1 loja A não é dona do checkout de B", storeOwnsCheckout(storeA, "123") === false);
   check("1 loja B é a dona (API confirma)", storeOwnsCheckout(storeB, "123") === true);
-  // duas lojas podem possuir o MESMO cartId sem colidir (chaves + posse por API).
-  check("1 duas lojas com cartId igual não colidem", signalKey("A", "123") !== signalKey("B", "123") && storeOwnsCheckout(new Set(["123"]), "123"));
 }
 
 // ===== Bloqueador 4: timestamp do servidor é autoridade =====

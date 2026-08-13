@@ -1,32 +1,33 @@
-// Ingestão do SINAL de carrinho vindo do módulo NubeSDK (Web Worker, storefront).
+// Ingestão do SINAL de carrinho do módulo NubeSDK (Web Worker, storefront).
 //
-// SEGURANÇA — o sinal é UNTRUSTED INPUT:
-// - CORS restritivo; valida estrutura/tipos/limites (zod .strict);
-// - NÃO seleciona a loja pelo storeId do cliente: o sinal é gravado numa coleção
-//   GLOBAL por cartId; a loja dona é resolvida SERVER-SIDE pela API oficial
-//   (cron cart-signals). storeId do payload é só telemetria (bloqueador 1);
-// - usa o RELÓGIO DO SERVIDOR (receivedAt); ignora o timestamp do cliente
-//   (bloqueador 4);
-// - COMPLETED do browser é só HINT; nunca encerra (bloqueador 2);
-// - status "terminal" (setado server-side) NUNCA regride (bloqueador 3, atômico);
+// SEGURANÇA — sinal UNTRUSTED. Autoridade server-side:
+// - storeId/storeDomain/cartId do cliente são UNTRUSTED;
+// - a loja reivindicada precisa existir e estar ativa (checagem A);
+// - VÍNCULO ORIGIN↔LOJA (checagem D): a Origin precisa bater com os domínios
+//   legítimos DAQUELA loja (GET /store, cacheados). Não basta ser "alguma" loja
+//   Nuvemshop. Enquanto os domínios não estão cacheados (cold-start), exige ao
+//   menos origem Nuvemshop; a confirmação definitiva (posse do checkout) ocorre
+//   no cron via API oficial;
+// - relógio do servidor (receivedAt); terminal não regride (transação);
+// - identidade Firestore store-scoped + hash do cartId (sem colisão);
 // - NÃO envia mensagem, NÃO acessa dado privado, NÃO altera pedido/loja.
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/firebase/admin";
-import { corsHeaders, isAllowedOrigin } from "@/lib/storefront/cors";
+import { db, storeRef, col } from "@/lib/firebase/admin";
+import { corsHeadersFor, isAllowedOrigin } from "@/lib/storefront/cors";
 import { parseCartSignal } from "@/lib/storefront/cartSignal";
-import { reduceSignalDoc, signalKey, type SignalDoc } from "@/lib/storefront/signalDoc";
+import { reduceSignalDoc, type SignalDoc } from "@/lib/storefront/signalDoc";
+import { cartKeyHash } from "@/lib/storefront/cartKey";
+import { originMatchesStore, hasKnownDomains } from "@/lib/storefront/tenantOrigin";
+import type { Store } from "@/types";
 
+// Preflight reflete a origem (o POST é que valida tenant-origin).
 export async function OPTIONS(req: NextRequest) {
-  return new NextResponse(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
+  return new NextResponse(null, { status: 204, headers: corsHeadersFor(req.headers.get("origin")) });
 }
 
 export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
-  const cors = corsHeaders(origin);
-
-  if (!isAllowedOrigin(origin)) {
-    return NextResponse.json({ error: "origem nao permitida" }, { status: 403 });
-  }
+  const cors = corsHeadersFor(origin);
 
   let body: unknown;
   try {
@@ -34,21 +35,31 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "json invalido" }, { status: 400, headers: cors });
   }
-
   const parsed = parseCartSignal(body);
   if (!parsed.ok) {
     return NextResponse.json({ error: "payload invalido", detail: parsed.error }, { status: 400, headers: cors });
   }
+  const { storeId, cartId, phase } = parsed.data;
 
-  const { cartId, phase, storeId } = parsed.data;
-  const receivedAt = Date.now(); // relógio do servidor = autoridade
+  // (A) loja reivindicada existe e está ativa.
+  const store = (await storeRef(storeId).get()).data() as Store | undefined;
+  if (!store || store.status !== "active") {
+    return NextResponse.json({ error: "loja invalida" }, { status: 403, headers: cors });
+  }
 
-  // Identidade COMPOSTA store-scoped (storeId+cartId), ambos UNTRUSTED aqui. A
-  // promoção para identidade confiável ocorre no cron, após a API oficial da
-  // loja confirmar a posse do checkout. Evita colisão de cartId entre lojas.
-  const ref = db.collection("cart_signals").doc(signalKey(storeId, cartId));
+  // (D) vínculo Origin↔loja.
+  if (hasKnownDomains(store)) {
+    if (!originMatchesStore(origin, store)) {
+      return NextResponse.json({ error: "origin nao corresponde a loja" }, { status: 403, headers: cors });
+    }
+  } else if (!isAllowedOrigin(origin)) {
+    // cold-start (domínios ainda não cacheados): exige origem Nuvemshop.
+    return NextResponse.json({ error: "origem nao permitida" }, { status: 403, headers: cors });
+  }
 
-  // Transação: terminal não regride; atividade renovada com tempo do servidor.
+  // Identidade store-scoped + hash do cartId (guarda o cartId original no doc).
+  const receivedAt = Date.now();
+  const ref = col(storeId, "cart_signals").doc(cartKeyHash(cartId));
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? (snap.data() as SignalDoc) : null;

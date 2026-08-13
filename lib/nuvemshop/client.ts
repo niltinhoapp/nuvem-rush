@@ -47,6 +47,13 @@ export class NuvemshopClient {
     return this.request<unknown[]>("categories");
   }
 
+  // Dados da loja (GET /store). Campos oficiais usados: `domains` (domínios
+  // próprios) e `original_domain` (subdomínio nuvemshop). Para validar a Origin
+  // do sinal NubeSDK contra os domínios legítimos DAQUELA loja.
+  getStore() {
+    return this.request<{ domains?: string[]; original_domain?: string }>("store");
+  }
+
   // Carrinhos abandonados criados a partir de `since` (ISO 8601), mais recentes.
   listCheckouts(sinceISO?: string, perPage = 50) {
     const q = new URLSearchParams({ per_page: String(perPage), sort_by: "created-at-descending" });

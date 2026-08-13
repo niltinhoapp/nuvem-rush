@@ -8,13 +8,14 @@ export type SignalPhaseIn = "ACTIVITY" | "CHECKOUT_STARTED" | "COMPLETED";
 
 export interface SignalDoc {
   storeId: string; // loja REIVINDICADA (untrusted até a API confirmar)
-  cartId: string;
+  cartId: string; // cartId ORIGINAL (o doc id é o hash — ver cartKeyHash)
   receivedAt: number;
   lastActivityAt: number; // servidor — autoridade do timeout
   reachedCheckout: boolean;
   clientCompleted: boolean; // HINT do browser — nunca encerra sozinho
   status: SignalStatus;
-  leaseAt?: number; // quando entrou em "processing" (para recuperar lease preso)
+  leaseAt?: number; // quando entrou em "processing"
+  leaseId?: string; // FENCING: só quem detém este lease pode finalizar/liberar
   terminalReason?: string;
 }
 
@@ -23,14 +24,6 @@ export interface IncomingSignal {
   cartId: string;
   phase: SignalPhaseIn;
   receivedAt: number; // relógio do SERVIDOR
-}
-
-// Identidade COMPOSTA store-scoped. cartId/checkoutId NÃO é garantidamente único
-// entre lojas -> namespacing por loja evita colisão. (storeId ainda é untrusted
-// nesta chave; a promoção para confiável ocorre no cron, após a API confirmar.)
-export function signalKey(storeId: string, cartId: string): string {
-  const clean = (s: string) => s.replace(/[/:]/g, "_");
-  return `${clean(storeId)}:${clean(cartId)}`;
 }
 
 // Aplica um sinal ao doc. ATÔMICO no caller (transação). Terminal NUNCA regride;
@@ -90,4 +83,14 @@ export function canClaimSignal(
 // Bloqueador 1: a loja DONA é a que a API oficial confirma possuir o checkout id.
 export function storeOwnsCheckout(storeCheckoutIds: ReadonlySet<string>, cartId: string): boolean {
   return storeCheckoutIds.has(cartId);
+}
+
+// FENCING (bloqueador 1): só finaliza/libera quem detém o lease vigente. Se o
+// lease expirou e outro worker assumiu (leaseId diferente) ou já é terminal, o
+// worker antigo é rejeitado (no-op).
+export function canFinalizeSignal(
+  doc: Pick<SignalDoc, "status" | "leaseId">,
+  myLeaseId: string,
+): boolean {
+  return doc.status === "processing" && doc.leaseId === myLeaseId;
 }

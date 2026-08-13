@@ -10,6 +10,12 @@ export interface Store {
   plan: Plan;
   status: "active" | "uninstalled";
   installedAt: number;
+  // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
+  // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).
+  // NAO preenchidos no OAuth; populados sob demanda pelo cron de sinais.
+  domains?: string[];
+  originalDomain?: string;
+  domainsRefreshedAt?: number;
   quotas: {
     contactsLimit: number;
     // Cota de E-MAIL (nome legado "dispatches" mantido p/ compatibilidade

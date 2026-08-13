@@ -37,7 +37,9 @@ export const App: NubeApp = (nube: NubeSDK) => {
 
   for (const event of EVENTS) {
     nube.on(event, (state: NubeSDKState) => {
+      // Fonte oficial: store.id (identificador) e store.domain. Sem PII.
       const storeId = String(state.store?.id ?? "");
+      const storeDomain = state.store?.domain;
       const cartId = String(state.cart?.id ?? "");
       if (!cartId) return; // sem carrinho: nada a sinalizar
 
@@ -45,6 +47,7 @@ export const App: NubeApp = (nube: NubeSDK) => {
       const { state: next, signal } = reduceCart(machine, event, {
         storeId,
         cartId,
+        storeDomain,
         hasItems: (state.cart?.items?.length ?? 0) > 0,
         hasContact: Boolean(state.customer),
         now,
