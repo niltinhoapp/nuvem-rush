@@ -7,10 +7,12 @@ import { eventKey } from "@/lib/webhooks/idempotency";
 // resolve a loja via API (nunca confia neles).
 export const cartSignalSchema = z
   .object({
+    // storeId e cartId são UNTRUSTED aqui; o cron valida a posse via API oficial
+    // antes de promover a identidade confiável (signalKey store-scoped).
+    storeId: z.string().min(1).max(64),
     cartId: z.string().min(1).max(128),
     phase: z.enum(["ACTIVITY", "CHECKOUT_STARTED", "COMPLETED"]),
     clientAt: z.number().int().positive().optional(),
-    storeId: z.string().min(1).max(64).optional(),
   })
   .strict();
 

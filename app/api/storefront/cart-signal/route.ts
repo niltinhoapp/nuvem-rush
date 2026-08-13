@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase/admin";
 import { corsHeaders, isAllowedOrigin } from "@/lib/storefront/cors";
 import { parseCartSignal } from "@/lib/storefront/cartSignal";
-import { reduceSignalDoc, type SignalDoc } from "@/lib/storefront/signalDoc";
+import { reduceSignalDoc, signalKey, type SignalDoc } from "@/lib/storefront/signalDoc";
 
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
@@ -43,15 +43,17 @@ export async function POST(req: NextRequest) {
   const { cartId, phase, storeId } = parsed.data;
   const receivedAt = Date.now(); // relógio do servidor = autoridade
 
-  // Coleção GLOBAL por cartId (a loja é resolvida server-side, não pelo cliente).
-  const ref = db.collection("cart_signals").doc(cartId);
+  // Identidade COMPOSTA store-scoped (storeId+cartId), ambos UNTRUSTED aqui. A
+  // promoção para identidade confiável ocorre no cron, após a API oficial da
+  // loja confirmar a posse do checkout. Evita colisão de cartId entre lojas.
+  const ref = db.collection("cart_signals").doc(signalKey(storeId, cartId));
 
   // Transação: terminal não regride; atividade renovada com tempo do servidor.
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? (snap.data() as SignalDoc) : null;
-    const nextDoc = reduceSignalDoc(existing, { cartId, phase, receivedAt, storeId });
-    tx.set(ref, nextDoc); // no-op efetivo se já terminal (mesmo objeto)
+    const nextDoc = reduceSignalDoc(existing, { storeId, cartId, phase, receivedAt });
+    tx.set(ref, nextDoc);
   });
 
   return NextResponse.json({ ok: true }, { headers: cors });

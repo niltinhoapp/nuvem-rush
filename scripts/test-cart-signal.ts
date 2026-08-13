@@ -12,13 +12,14 @@ function check(label: string, got: boolean) {
 }
 
 async function main() {
-  // ---- Validação (payload UNTRUSTED) ----
-  check("válido ACTIVITY", parseCartSignal({ cartId: "c1", phase: "ACTIVITY" }).ok === true);
-  check("válido com telemetria opcional", parseCartSignal({ cartId: "c1", phase: "COMPLETED", clientAt: 5, storeId: "s1" }).ok === true);
-  check("falta cartId => rejeitado", parseCartSignal({ phase: "ACTIVITY" }).ok === false);
-  check("phase inválida => rejeitado", parseCartSignal({ cartId: "c1", phase: "HACK" }).ok === false);
-  check("campo extra (strict) => rejeitado", parseCartSignal({ cartId: "c1", phase: "ACTIVITY", email: "a@b.c" }).ok === false);
-  check("clientAt não-positivo => rejeitado", parseCartSignal({ cartId: "c1", phase: "ACTIVITY", clientAt: 0 }).ok === false);
+  // ---- Validação (payload UNTRUSTED: storeId+cartId obrigatórios) ----
+  check("válido ACTIVITY", parseCartSignal({ storeId: "s1", cartId: "c1", phase: "ACTIVITY" }).ok === true);
+  check("válido com telemetria opcional", parseCartSignal({ storeId: "s1", cartId: "c1", phase: "COMPLETED", clientAt: 5 }).ok === true);
+  check("falta storeId => rejeitado", parseCartSignal({ cartId: "c1", phase: "ACTIVITY" }).ok === false);
+  check("falta cartId => rejeitado", parseCartSignal({ storeId: "s1", phase: "ACTIVITY" }).ok === false);
+  check("phase inválida => rejeitado", parseCartSignal({ storeId: "s1", cartId: "c1", phase: "HACK" }).ok === false);
+  check("campo extra (strict) => rejeitado", parseCartSignal({ storeId: "s1", cartId: "c1", phase: "ACTIVITY", email: "a@b.c" }).ok === false);
+  check("clientAt não-positivo => rejeitado", parseCartSignal({ storeId: "s1", cartId: "c1", phase: "ACTIVITY", clientAt: 0 }).ok === false);
 
   // ---- CORS restritivo ----
   check("CORS aceita origem Nuvemshop", isAllowedOrigin("https://loja.lojavirtualnuvem.com.br") === true);
@@ -65,7 +66,7 @@ async function main() {
     check("13 endpoint valida payload (zod)", route.includes("parseCartSignal"));
     check("13 endpoint usa tempo do servidor (Date.now)", route.includes("Date.now()"));
     check("13 endpoint atualiza terminal atomicamente (transaction)", route.includes("runTransaction"));
-    check("13 endpoint NÃO roteia por storeId do cliente (coleção global)", route.includes('db.collection("cart_signals")'));
+    check("13 endpoint usa identidade composta store-scoped (signalKey)", route.includes("signalKey(storeId, cartId)"));
   }
 
   console.log(`\n${pass} passaram, ${fail} falharam`);
