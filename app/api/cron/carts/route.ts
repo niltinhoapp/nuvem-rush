@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, col } from "@/lib/firebase/admin";
 import { NuvemshopClient } from "@/lib/nuvemshop/client";
 import { syncAbandonedCheckout } from "@/lib/nuvemshop/carts";
-import { enrollCartInFlows } from "@/lib/rules/process";
+import { enrollCartOnce } from "@/lib/storefront/enrollCartOnce";
 import type { NsCheckout } from "@/lib/nuvemshop/types";
 import type { Store } from "@/types";
 
@@ -45,8 +45,10 @@ export async function GET(req: NextRequest) {
       if ((await cartRef.get()).exists) continue;
 
       const { cart, contact } = await syncAbandonedCheckout(storeDoc.id, raw);
-      await enrollCartInFlows(storeDoc.id, cart, contact);
-      novos++;
+      // enrollCartOnce: claim atômico compartilhado com o sinal do NubeSDK —
+      // sinal + polling nunca criam duas recuperações para o mesmo carrinho.
+      const did = await enrollCartOnce(storeDoc.id, cart, contact);
+      if (did) novos++;
     }
   }
 

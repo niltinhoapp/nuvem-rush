@@ -4,6 +4,7 @@
   "framework": "nextjs",
   "crons": [
     { "path": "/api/cron/dispatch", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/cart-signals", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/carts", "schedule": "0 9 * * *" },
     { "path": "/api/cron/refresh-whatsapp-tokens", "schedule": "30 7 * * *" }
   ]
