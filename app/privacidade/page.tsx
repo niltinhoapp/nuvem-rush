@@ -44,11 +44,12 @@ export default function PrivacidadePage() {
 
       <h2>4. Retenção e exclusão</h2>
       <p>
-        Os dados são mantidos enquanto o aplicativo estiver instalado. Ao desinstalar,
-        ou mediante solicitação via os webhooks de LGPD (<code>store/redact</code>,
-        <code>customers/redact</code>), os dados pessoais são removidos ou anonimizados.
-        Solicitações de acesso (<code>customers/data_request</code>) são atendidas
-        conforme a lei.
+        Os dados são mantidos pelo tempo necessário para prestar o serviço e cumprir
+        obrigações aplicáveis. A desinstalação e as solicitações recebidas pelos
+        webhooks de LGPD (<code>store/redact</code>, <code>customers/redact</code> e
+        <code>customers/data_request</code>) são registradas para tratamento. Para
+        acompanhar ou solicitar acesso, correção ou exclusão, entre em contato com
+        nosso suporte.
       </p>
 
       <h2>5. Direitos do titular</h2>
