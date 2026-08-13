@@ -28,7 +28,7 @@ export default function SuportePage() {
       <p><strong>Os disparos têm atraso?</strong> Você define o tempo de cada etapa
         (após X minutos, horas ou dias da compra).</p>
       <p><strong>Como cancelo?</strong> Basta desinstalar o aplicativo pelo painel da
-        sua loja; seus dados são removidos conforme nossa
+        sua loja. Solicitações relacionadas aos dados são tratadas conforme nossa
         <a href="/privacidade"> Política de Privacidade</a>.</p>
     </main>
   );
