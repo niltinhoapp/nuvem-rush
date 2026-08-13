@@ -10,7 +10,7 @@
 // + indice composto (status ASC, runAt ASC) e paginacao por runAt.
 import { NextRequest, NextResponse } from "next/server";
 import { db, col } from "@/lib/firebase/admin";
-import { dispatchJob } from "@/lib/dispatch";
+import { dispatchJob, recoverOrphanProcessingJobs } from "@/lib/dispatch";
 import { isJobDue } from "@/lib/dispatch/claim";
 import type { Job } from "@/types";
 
@@ -32,9 +32,14 @@ export async function GET(req: NextRequest) {
   const stores = await db.collection("stores").where("status", "==", "active").get();
 
   let scanned = 0;
+  let recovered = 0;
   const due: Job[] = [];
 
   for (const store of stores.docs) {
+    // Recupera jobs presos em "processing" (worker morto pos-claim) ANTES do
+    // scan, para que voltem a "scheduled" e sejam disparados neste mesmo ciclo.
+    recovered += await recoverOrphanProcessingJobs(store.id, now);
+
     const snap = await col(store.id, "jobs")
       .where("status", "==", "scheduled")
       .limit(PER_STORE_LIMIT)
@@ -61,5 +66,5 @@ export async function GET(req: NextRequest) {
     ).length;
   }
 
-  return NextResponse.json({ ok: true, stores: stores.size, scanned, due: due.length, sent });
+  return NextResponse.json({ ok: true, stores: stores.size, scanned, recovered, due: due.length, sent });
 }

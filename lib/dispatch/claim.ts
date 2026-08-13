@@ -26,6 +26,23 @@ export function isJobDue(runAt: number, now: number): boolean {
   return runAt <= now;
 }
 
+// Limiar para considerar um job "processing" como ORFAO (worker morreu apos o
+// claim e antes de escrever o estado terminal). O maxDuration do cron e 60s,
+// entao nenhuma execucao legitima fica "processing" por 10 min — a margem e 10x.
+export const PROCESSING_TIMEOUT_MS = 10 * 60_000;
+
+// True se o job esta preso em "processing" ha tempo demais e pode ser recuperado.
+// Exige claimedAt conhecido (jobs sem claimedAt NAO sao tocados, por seguranca).
+export function isOrphanProcessing(
+  status: string,
+  claimedAt: number | undefined,
+  now: number,
+  timeoutMs: number = PROCESSING_TIMEOUT_MS,
+): boolean {
+  if (status !== "processing" || claimedAt === undefined) return false;
+  return now - claimedAt >= timeoutMs;
+}
+
 // Store de jobs em memoria com claim ATOMICO (secao critica sincrona),
 // espelhando a garantia da transacao do Firestore. Usada nos testes de
 // concorrencia (dois workers tentando o mesmo job).

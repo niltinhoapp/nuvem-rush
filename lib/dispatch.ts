@@ -6,8 +6,8 @@ import { sendEmail } from "@/lib/channels/email";
 import { sendWhatsapp } from "@/lib/channels/whatsapp";
 import { applyTag } from "@/lib/channels/tag";
 import { triggerWebhook } from "@/lib/channels/webhook";
-import { canClaim, quotaUsageField, hasQuota } from "@/lib/dispatch/claim";
-import { planRetry } from "@/lib/dispatch/retry";
+import { canClaim, quotaUsageField, hasQuota, isOrphanProcessing } from "@/lib/dispatch/claim";
+import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 
 export type DispatchResult =
@@ -138,4 +138,60 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     jobId, channel: step.action, status: "sent", at: Date.now(),
   });
   return { ok: true, status: "sent" };
+}
+
+// Recupera jobs presos em "processing" (worker/funcao morreu apos o claim e
+// antes de escrever o estado terminal). O maxDuration do cron e 60s, entao um
+// job "processing" ha mais de PROCESSING_TIMEOUT_MS (10 min) certamente esta
+// orfao. Devolve para "scheduled" para nova tentativa.
+//
+// Seguranca:
+// - ATOMICO: a transacao rechecha isOrphanProcessing dentro do tx, entao dois
+//   crons concorrentes nunca recuperam o mesmo job (o 2o le status != processing).
+// - NUNCA toca "sent"/"failed"/"cancelled" (o filtro so pega "processing" antigo).
+// - Preserva/incrementa attempts: a recuperacao conta como tentativa; esgotado
+//   MAX_ATTEMPTS, marca "failed" (evita loop infinito de recuperacao).
+export async function recoverOrphanProcessingJobs(
+  storeId: string,
+  now: number,
+): Promise<number> {
+  const snap = await col(storeId, "jobs")
+    .where("status", "==", "processing")
+    .limit(1000)
+    .get();
+
+  let recovered = 0;
+  for (const d of snap.docs) {
+    const job = d.data() as Job;
+    if (!isOrphanProcessing(job.status, job.claimedAt, now)) continue;
+
+    const ok = await db.runTransaction(async (tx) => {
+      const s = await tx.get(d.ref);
+      if (!s.exists) return false;
+      const j = s.data() as Job;
+      // Recheca dentro da transacao: se outro cron ja recuperou (status mudou),
+      // desiste — sem duplicidade.
+      if (!isOrphanProcessing(j.status, j.claimedAt, now)) return false;
+
+      const attempts = (j.attempts ?? 0) + 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        tx.update(d.ref, {
+          status: "failed",
+          attempts,
+          lastError: "orfao em processing: tentativas esgotadas",
+        });
+      } else {
+        tx.update(d.ref, {
+          status: "scheduled",
+          runAt: now,
+          attempts,
+          lastError: "recuperado de processing orfao",
+          nextAttemptAt: now,
+        });
+      }
+      return true;
+    });
+    if (ok) recovered++;
+  }
+  return recovered;
 }
