@@ -1,26 +1,25 @@
 // Ingestão do SINAL de carrinho do módulo NubeSDK (Web Worker, storefront).
 //
-// SEGURANÇA — sinal UNTRUSTED. Autoridade server-side:
+// SEGURANÇA — sinal UNTRUSTED, TENANT-BOUND antes de qualquer efeito:
 // - storeId/storeDomain/cartId do cliente são UNTRUSTED;
-// - a loja reivindicada precisa existir e estar ativa (checagem A);
-// - VÍNCULO ORIGIN↔LOJA (checagem D): a Origin precisa bater com os domínios
-//   legítimos DAQUELA loja (GET /store, cacheados). Não basta ser "alguma" loja
-//   Nuvemshop. Enquanto os domínios não estão cacheados (cold-start), exige ao
-//   menos origem Nuvemshop; a confirmação definitiva (posse do checkout) ocorre
-//   no cron via API oficial;
-// - relógio do servidor (receivedAt); terminal não regride (transação);
-// - identidade Firestore store-scoped + hash do cartId (sem colisão);
-// - NÃO envia mensagem, NÃO acessa dado privado, NÃO altera pedido/loja.
+// - (A) a loja reivindicada precisa existir, estar ativa e ter access token;
+// - (D) VÍNCULO ORIGIN↔LOJA obrigatório ANTES de gravar/renovar o sinal: a
+//   Origin é validada contra os domínios LEGÍTIMOS daquela loja. Os domínios
+//   vêm do cache SÓ se fresco; senão de GET /store server-side (fonte de
+//   verdade). Se GET /store falhar e não houver cache fresco -> FAIL CLOSED.
+//   Sufixo genérico Nuvemshop NUNCA prova pertencer àquela loja;
+// - relógio do servidor (receivedAt); terminal não regride; identidade
+//   store-scoped + hash do cartId; NÃO envia/nao lê dado privado/nao altera loja.
 import { NextRequest, NextResponse } from "next/server";
 import { db, storeRef, col } from "@/lib/firebase/admin";
-import { corsHeadersFor, isAllowedOrigin } from "@/lib/storefront/cors";
+import { NuvemshopClient } from "@/lib/nuvemshop/client";
+import { corsHeadersFor } from "@/lib/storefront/cors";
 import { parseCartSignal } from "@/lib/storefront/cartSignal";
 import { reduceSignalDoc, type SignalDoc } from "@/lib/storefront/signalDoc";
 import { cartKeyHash } from "@/lib/storefront/cartKey";
-import { originMatchesStore, hasKnownDomains } from "@/lib/storefront/tenantOrigin";
+import { originMatchesStore, isDomainsCacheFresh, type StoreDomains } from "@/lib/storefront/tenantOrigin";
 import type { Store } from "@/types";
 
-// Preflight reflete a origem (o POST é que valida tenant-origin).
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeadersFor(req.headers.get("origin")) });
 }
@@ -41,23 +40,34 @@ export async function POST(req: NextRequest) {
   }
   const { storeId, cartId, phase } = parsed.data;
 
-  // (A) loja reivindicada existe e está ativa.
+  // (A) loja existe, ativa e com token.
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
-  if (!store || store.status !== "active") {
+  if (!store || store.status !== "active" || !store.accessToken) {
     return NextResponse.json({ error: "loja invalida" }, { status: 403, headers: cors });
   }
 
-  // (D) vínculo Origin↔loja.
-  if (hasKnownDomains(store)) {
-    if (!originMatchesStore(origin, store)) {
-      return NextResponse.json({ error: "origin nao corresponde a loja" }, { status: 403, headers: cors });
+  // (D) domínios confiáveis da loja: cache fresco OU GET /store server-side.
+  const now = Date.now();
+  let domains: StoreDomains = { domains: store.domains, originalDomain: store.originalDomain };
+  if (!isDomainsCacheFresh(store.domainsRefreshedAt, now)) {
+    try {
+      const info = await new NuvemshopClient(storeId, store.accessToken).getStore();
+      domains = { domains: info.domains ?? [], originalDomain: info.original_domain };
+      await storeRef(storeId)
+        .set({ ...domains, domainsRefreshedAt: now }, { merge: true })
+        .catch(() => {}); // cache é otimização; falha ao persistir não bloqueia
+    } catch {
+      // FAIL CLOSED: sem cache fresco e GET /store falhou -> rejeita o sinal.
+      return NextResponse.json({ error: "nao foi possivel validar a loja" }, { status: 403, headers: cors });
     }
-  } else if (!isAllowedOrigin(origin)) {
-    // cold-start (domínios ainda não cacheados): exige origem Nuvemshop.
-    return NextResponse.json({ error: "origem nao permitida" }, { status: 403, headers: cors });
   }
 
-  // Identidade store-scoped + hash do cartId (guarda o cartId original no doc).
+  // Origin precisa bater EXATAMENTE com os domínios DAQUELA loja.
+  if (!originMatchesStore(origin, domains)) {
+    return NextResponse.json({ error: "origin nao corresponde a loja" }, { status: 403, headers: cors });
+  }
+
+  // Só aqui, tenant-bound confirmado, gravamos/renovamos o sinal.
   const receivedAt = Date.now();
   const ref = col(storeId, "cart_signals").doc(cartKeyHash(cartId));
   await db.runTransaction(async (tx) => {

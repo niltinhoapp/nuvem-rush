@@ -21,7 +21,6 @@ import type { Store } from "@/types";
 
 export const maxDuration = 60;
 const LIMIT = 500;
-const DOMAINS_TTL_MS = 24 * 60 * 60_000;
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -56,24 +55,9 @@ export async function GET(req: NextRequest) {
     const store = (await storeRef(storeId).get()).data() as Store | undefined;
     if (!store || store.status !== "active" || !store.accessToken) continue;
 
-    const client = new NuvemshopClient(storeId, store.accessToken);
-
-    // Cacheia os domínios da loja (para o tenant-origin do endpoint), sem OAuth.
-    if (!store.domainsRefreshedAt || now - store.domainsRefreshedAt > DOMAINS_TTL_MS) {
-      try {
-        const info = await client.getStore();
-        await storeRef(storeId).set(
-          { domains: info.domains ?? [], originalDomain: info.original_domain ?? null, domainsRefreshedAt: now },
-          { merge: true },
-        );
-      } catch {
-        /* segue sem os domínios; endpoint cai no fallback documentado */
-      }
-    }
-
     let checkouts: NsCheckout[] = [];
     try {
-      checkouts = await client.listCheckouts();
+      checkouts = await new NuvemshopClient(storeId, store.accessToken).listCheckouts();
     } catch {
       continue;
     }

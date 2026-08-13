@@ -1,5 +1,5 @@
-// Testes do vínculo Origin↔loja (bloqueador 3).
-import { originMatchesStore, hasKnownDomains } from "../lib/storefront/tenantOrigin";
+// Testes do vínculo Origin↔loja (bloqueadores 1/3).
+import { originMatchesStore, hasKnownDomains, isDomainsCacheFresh, DOMAINS_TTL_MS } from "../lib/storefront/tenantOrigin";
 
 let pass = 0;
 let fail = 0;
@@ -32,6 +32,12 @@ check("malformada => rejeita", originMatchesStore("not-a-url", storeA) === false
 check("sem domínios => hasKnownDomains false", hasKnownDomains({}) === false);
 check("sem domínios => originMatchesStore false", originMatchesStore("https://www.lojaA.com", {}) === false);
 check("com domínios => hasKnownDomains true", hasKnownDomains(storeA) === true);
+
+// Frescor do cache (bloqueador 1): cache é otimização; se não fresco, o endpoint
+// busca GET /store (ou FAIL CLOSED).
+check("cache ausente => não é fresco (força GET /store)", isDomainsCacheFresh(undefined, 1000) === false);
+check("cache recente => fresco", isDomainsCacheFresh(1000, 1000 + 60_000) === true);
+check("cache vencido => não é fresco", isDomainsCacheFresh(1000, 1000 + DOMAINS_TTL_MS) === false);
 
 console.log(`\n${pass} passaram, ${fail} falharam`);
 process.exit(fail === 0 ? 0 : 1);

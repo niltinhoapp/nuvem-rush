@@ -54,3 +54,15 @@ export function originMatchesStore(origin: string | null, store: StoreDomains): 
 export function hasKnownDomains(store: StoreDomains): boolean {
   return legitimateHosts(store).length > 0;
 }
+
+// Validade do cache de domínios. Cache é OTIMIZAÇÃO; se não estiver fresco, o
+// endpoint busca GET /store server-side (fonte de verdade) ou FAIL CLOSED.
+export const DOMAINS_TTL_MS = 24 * 60 * 60_000;
+
+export function isDomainsCacheFresh(
+  refreshedAt: number | undefined,
+  now: number,
+  ttlMs: number = DOMAINS_TTL_MS,
+): boolean {
+  return typeof refreshedAt === "number" && now - refreshedAt < ttlMs;
+}

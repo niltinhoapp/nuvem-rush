@@ -41,14 +41,22 @@ async function main() {
   // ---- 13) endpoint sem operação privilegiada + autoridade server-side ----
   {
     const route = readFileSync("app/api/storefront/cart-signal/route.ts", "utf8");
-    const privileged = ["sendWhatsapp", "sendEmail", "applyTag", "triggerWebhook", "dispatchJob", "enrollCartInFlows", "accessToken", "CRON_SECRET"];
-    check("13 endpoint sem envio/enroll/segredo", privileged.every((s) => !route.includes(s)));
+    // Nota: o endpoint usa store.accessToken SERVER-SIDE só para GET /store
+    // (validar a loja, bloqueador 1) — leitura, não operação privilegiada.
+    const privileged = ["sendWhatsapp", "sendEmail", "applyTag", "triggerWebhook", "dispatchJob", "enrollCartInFlows", "CRON_SECRET"];
+    check("13 endpoint sem envio/enroll/segredo de servidor", privileged.every((s) => !route.includes(s)));
+    check("13 endpoint nao devolve o accessToken na resposta", !/NextResponse\.json\([^)]*accessToken/.test(route));
     check("13 endpoint valida payload (zod)", route.includes("parseCartSignal"));
     check("13 endpoint usa tempo do servidor (Date.now)", route.includes("Date.now()"));
     check("13 endpoint atualiza terminal atomicamente (transaction)", route.includes("runTransaction"));
     check("13 endpoint valida tenant-origin (originMatchesStore)", route.includes("originMatchesStore"));
     check("13 endpoint checa loja ativa (storeRef)", route.includes("storeRef(storeId)"));
     check("13 endpoint usa identidade hash store-scoped (cartKeyHash)", route.includes("cartKeyHash(cartId)"));
+    // Bloqueador 1: cold-start fechado -> GET /store server-side + fail-closed.
+    check("1 endpoint busca dominios via GET /store (getStore)", route.includes(".getStore()"));
+    check("1 endpoint respeita frescor do cache (isDomainsCacheFresh)", route.includes("isDomainsCacheFresh"));
+    check("1 endpoint FAIL CLOSED (403 no catch do getStore)", /catch\s*\{[\s\S]*?status:\s*403/.test(route));
+    check("1 endpoint NAO usa sufixo generico como prova de tenant", !route.includes("isAllowedOrigin"));
   }
 
   console.log(`\n${pass} passaram, ${fail} falharam`);

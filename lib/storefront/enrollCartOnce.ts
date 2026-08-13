@@ -27,9 +27,10 @@ export async function enrollCartOnce(storeId: string, cart: Cart, contact: Conta
   });
   if (!claimed) return false;
 
-  // 2) Inscreve (idempotência de negócio a jusante). Se falhar, propaga: o lease
-  //    fica "enrolling" e expira -> retry futuro. NÃO marcamos enrolled.
-  await enrollCartInFlows(storeId, cart, contact);
+  // 2) Inscreve. A idempotência REAL vive no efeito persistido (enrollment/jobs
+  //    com id determinístico) — o lease é só otimização de concorrência. Se
+  //    falhar, propaga: o lease fica "enrolling" e expira -> retry futuro.
+  const created = await enrollCartInFlows(storeId, cart, contact);
 
   // 3) Finaliza (enrolling -> enrolled) SÓ se ainda detemos o lease (fencing).
   await db.runTransaction(async (tx) => {
@@ -39,5 +40,5 @@ export async function enrollCartOnce(storeId: string, cart: Cart, contact: Conta
       tx.set(ref, { status: "enrolled" }, { merge: true });
     }
   });
-  return true;
+  return created > 0; // true = inscreveu algo novo; false = já estava inscrito
 }
