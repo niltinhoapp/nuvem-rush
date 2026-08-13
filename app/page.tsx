@@ -15,6 +15,11 @@ export default function HomePage() {
 
   useEffect(() => {
     if (window.self !== window.top) {
+      // Redirect unico ao detectar o iframe do admin. O setState aqui e
+      // intencional: serve so para renderizar `null` (evitar piscar a landing)
+      // enquanto o window.location.replace navega. Nao ha cascata de renders
+      // (a pagina sai em seguida), entao a regra e um falso-positivo aqui.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEmbedded(true);
       window.location.replace(`/dashboard${window.location.search}`);
     }
