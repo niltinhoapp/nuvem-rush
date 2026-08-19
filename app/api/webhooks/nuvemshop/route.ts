@@ -2,10 +2,11 @@
 // Valida HMAC, trata eventos LGPD na hora e enfileira pedidos para o motor.
 import { NextRequest, NextResponse } from "next/server";
 import { verifyHmac } from "@/lib/nuvemshop/webhooks";
-import { storeRef, col } from "@/lib/firebase/admin";
+import { col } from "@/lib/firebase/admin";
 import { handleOrderEvent } from "@/lib/rules/process";
 import { eventKey } from "@/lib/webhooks/idempotency";
 import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
+import { handleAppUninstalled } from "@/lib/lifecycle/uninstall";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -30,8 +31,8 @@ export async function POST(req: NextRequest) {
   switch (payload.event) {
     // ---- LGPD / ciclo de vida ----
     case "app/uninstalled":
-      await storeRef(storeId).set({ status: "uninstalled" }, { merge: true });
-      // TODO: agendar purga completa dos dados da loja.
+      await handleAppUninstalled(storeId);
+      // Dados permanecem retidos. Purga/anonimizacao exige fluxo LGPD separado.
       break;
 
     case "store/redact":

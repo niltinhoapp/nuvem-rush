@@ -7,6 +7,7 @@ import { delayToMs } from "@/lib/time";
 import { syncOrder } from "@/lib/nuvemshop/sync";
 import { enrollmentKey, jobKey, planEnrollment } from "@/lib/rules/enrollmentKey";
 import type { Cart, Contact, Flow, Order, Store } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 // Cria o enrollment e agenda os jobs de um flow que casou — IDEMPOTENTE.
 // `origin` liga o enrollment ao pedido ou ao carrinho de origem. A identidade é
@@ -31,8 +32,11 @@ async function createEnrollmentWithJobs(
 
   return db.runTransaction(async (tx) => {
     // Leituras antes das escritas (regra do Firestore).
+    const storeSnap = await tx.get(storeRef(storeId));
     const enrollSnap = await tx.get(enrollRef);
     const jobSnaps = await Promise.all(jobRefs.map((r) => tx.get(r)));
+
+    if (!isStoreCommerciallyActive(storeSnap.data()?.status)) return false;
 
     const plan = planEnrollment(enrollSnap.exists, jobSnaps.map((s) => s.exists));
 

@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-firestore-security-rules.ts && tsx scripts/test-rules.ts && tsx scripts/test-auth.ts && tsx scripts/test-checkout-pagination.ts && tsx scripts/test-nuvemshop-client-resilience.ts && tsx scripts/test-webhook-registration.ts && tsx scripts/test-serialize.ts && tsx scripts/test-idempotency.ts && tsx scripts/test-dispatch.ts && tsx scripts/test-retry.ts && tsx scripts/test-scheduler.ts && tsx scripts/test-recovery.ts && tsx scripts/test-cartstate.ts && tsx scripts/test-cart-signal.ts && tsx scripts/test-signal-server.ts && tsx scripts/test-signal-lease.ts && tsx scripts/test-cartkey.ts && tsx scripts/test-tenant-origin.ts && tsx scripts/test-fencing.ts && tsx scripts/test-enrollment-idempotency.ts && tsx scripts/test-oauth-reinstall.ts"
+    "test": "tsx scripts/test-firestore-security-rules.ts && tsx scripts/test-rules.ts && tsx scripts/test-auth.ts && tsx scripts/test-checkout-pagination.ts && tsx scripts/test-nuvemshop-client-resilience.ts && tsx scripts/test-webhook-registration.ts && tsx scripts/test-uninstall.ts && tsx scripts/test-serialize.ts && tsx scripts/test-idempotency.ts && tsx scripts/test-dispatch.ts && tsx scripts/test-retry.ts && tsx scripts/test-scheduler.ts && tsx scripts/test-recovery.ts && tsx scripts/test-cartstate.ts && tsx scripts/test-cart-signal.ts && tsx scripts/test-signal-server.ts && tsx scripts/test-signal-lease.ts && tsx scripts/test-cartkey.ts && tsx scripts/test-tenant-origin.ts && tsx scripts/test-fencing.ts && tsx scripts/test-enrollment-idempotency.ts && tsx scripts/test-oauth-reinstall.ts"
   },
   "dependencies": {
     "@google-cloud/tasks": "^6.2.3",

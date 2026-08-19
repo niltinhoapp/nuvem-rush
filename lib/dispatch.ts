@@ -9,6 +9,7 @@ import { triggerWebhook } from "@/lib/channels/webhook";
 import { canClaim, quotaUsageField, hasQuota, isOrphanProcessing } from "@/lib/dispatch/claim";
 import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 export type DispatchResult =
   | { ok: true; status: "sent" | "cancelled" | "skipped" | "failed"; reason?: string };
@@ -22,9 +23,16 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   // outra le "processing" e desiste. Jobs ja processados (sent/failed/cancelled)
   // ou em processamento tambem sao ignorados.
   const claim = await db.runTransaction(async (tx) => {
+    const storeSnap = await tx.get(storeRef(storeId));
     const snap = await tx.get(jobRef);
     if (!snap.exists) return { ok: false as const, reason: "job inexistente" };
     const j = snap.data() as Job;
+    if (!isStoreCommerciallyActive(storeSnap.data()?.status)) {
+      if (j.status === "scheduled" || j.status === "processing") {
+        tx.update(jobRef, { status: "cancelled", cancelReason: "store_inactive" });
+      }
+      return { ok: false as const, reason: "loja inativa" };
+    }
     if (!canClaim(j.status)) return { ok: false as const, reason: "ja processado" };
     tx.update(jobRef, { status: "processing", claimedAt: Date.now() });
     return { ok: true as const, job: j };
@@ -44,6 +52,17 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   if (!store || store.status !== "active") {
     await jobRef.update({ status: "cancelled" });
     return { ok: true, status: "cancelled", reason: "loja inativa" };
+  }
+
+  // Revalida imediatamente antes do efeito externo. Um uninstall cancela os
+  // jobs pendentes; um envio que ja saiu da aplicacao nao pode ser revogado.
+  const preSendStore = await storeRef(storeId).get();
+  const preSendJob = await jobRef.get();
+  if (!isStoreCommerciallyActive(preSendStore.data()?.status) || preSendJob.data()?.status !== "processing") {
+    if (preSendJob.data()?.status === "processing") {
+      await jobRef.update({ status: "cancelled", cancelReason: "store_inactive" });
+    }
+    return { ok: true, status: "cancelled", reason: "loja inativa antes do envio" };
   }
 
   // Reset mensal de cota (idempotente, sem cron): se o periodo (YYYY-MM) mudou
