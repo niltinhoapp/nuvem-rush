@@ -4,6 +4,12 @@
 
 import type { NsOrder, NsProduct, NsCheckout } from "./types";
 
+export type NsWebhook = {
+  id: number;
+  event: string;
+  url: string;
+};
+
 const API_BASE = "https://api.tiendanube.com/v1";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_READ_RETRIES = 2;
@@ -235,6 +241,11 @@ export class NuvemshopClient {
   }
 
   // Registra um webhook para um evento (ex.: "order/paid").
+  listWebhooks(event: string, url: string) {
+    const query = new URLSearchParams({ event, url, per_page: "200" });
+    return this.request<NsWebhook[]>(`webhooks?${query.toString()}`);
+  }
+
   createWebhook(event: string, url: string) {
     return this.request("webhooks", {
       method: "POST",

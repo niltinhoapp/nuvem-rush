@@ -42,6 +42,24 @@ async function main() {
   );
   assert.equal(calls, 1, "POST webhook nao pode repetir automaticamente");
 
+  let listedUrl = "";
+  const webhookLookup = new NuvemshopClient("1", "secret", {
+    fetchImpl: async (input) => {
+      listedUrl = String(input);
+      return Response.json([{ id: 1, event: "order/created", url: "https://example.invalid/hook" }]);
+    },
+  });
+  const listed = await webhookLookup.listWebhooks(
+    "order/created",
+    "https://example.invalid/hook",
+  );
+  assert.equal(listed.length, 1);
+  const lookupUrl = new URL(listedUrl);
+  assert.equal(lookupUrl.pathname, "/v1/1/webhooks");
+  assert.equal(lookupUrl.searchParams.get("event"), "order/created");
+  assert.equal(lookupUrl.searchParams.get("url"), "https://example.invalid/hook");
+  assert.equal(lookupUrl.searchParams.get("per_page"), "200");
+
   const permanent = new NuvemshopClient("1", "secret", {
     fetchImpl: async () => new Response("invalid", { status: 422 }),
   });

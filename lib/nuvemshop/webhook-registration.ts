@@ -3,10 +3,12 @@ import { REQUIRED_WEBHOOK_EVENTS } from "./webhooks";
 export type WebhookRegistrationResult = {
   event: (typeof REQUIRED_WEBHOOK_EVENTS)[number];
   status: "success" | "transient_error" | "permanent_error";
+  action?: "created" | "reused";
   httpStatus?: number;
 };
 
 type WebhookRegistrar = {
+  listWebhooks(event: string, url: string): Promise<Array<{ event: string; url: string }>>;
   createWebhook(event: string, url: string): Promise<unknown>;
 };
 
@@ -43,12 +45,21 @@ export async function registerRequiredWebhooks(
   url: string,
 ): Promise<WebhookRegistrationResult[]> {
   const settled = await Promise.allSettled(
-    REQUIRED_WEBHOOK_EVENTS.map((event) => client.createWebhook(event, url)),
+    REQUIRED_WEBHOOK_EVENTS.map(async (event) => {
+      // GET /webhooks is the authority. If listing fails, this promise rejects
+      // and no POST is attempted under uncertainty.
+      const existing = await client.listWebhooks(event, url);
+      if (existing.some((webhook) => webhook.event === event && webhook.url === url)) {
+        return "reused" as const;
+      }
+      await client.createWebhook(event, url);
+      return "created" as const;
+    }),
   );
   return settled.map((result, index) => {
     const event = REQUIRED_WEBHOOK_EVENTS[index]!;
     return result.status === "fulfilled"
-      ? { event, status: "success" }
+      ? { event, status: "success", action: result.value }
       : classifyWebhookRegistrationError(event, result.reason);
   });
 }
