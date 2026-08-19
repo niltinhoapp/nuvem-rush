@@ -5,7 +5,7 @@ import { exchangeCodeForToken } from "@/lib/nuvemshop/oauth";
 import { NuvemshopClient } from "@/lib/nuvemshop/client";
 import { REQUIRED_WEBHOOK_EVENTS } from "@/lib/nuvemshop/webhooks";
 import { storeRef } from "@/lib/firebase/admin";
-import { PLANS } from "@/lib/plans";
+import { buildStoreInstallData } from "@/lib/nuvemshop/store-install";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -16,26 +16,16 @@ export async function GET(req: NextRequest) {
   try {
     const token = await exchangeCodeForToken(code);
     const storeId = String(token.user_id);
+    const ref = storeRef(storeId);
+    const existingStore = await ref.get();
 
     // TODO: criptografar accessToken em repouso (KMS) antes de persistir.
-    await storeRef(storeId).set(
-      {
+    await ref.set(
+      buildStoreInstallData(
         storeId,
-        accessToken: token.access_token,
-        scope: token.scope,
-        // Toda instalacao comeca no Essencial (teste gratis de 14 dias).
-        plan: "essencial",
-        status: "active",
-        installedAt: Date.now(),
-        quotas: {
-          contactsLimit: PLANS.essencial.contactsLimit,
-          dispatchesMonthLimit: PLANS.essencial.emailsMonthLimit,
-          dispatchesMonthUsed: 0,
-          whatsappMonthLimit: PLANS.essencial.whatsappMonthLimit,
-          whatsappMonthUsed: 0,
-          periodKey: new Date().toISOString().slice(0, 7),
-        },
-      },
+        { accessToken: token.access_token, scope: token.scope },
+        existingStore.exists,
+      ),
       { merge: true },
     );
 
