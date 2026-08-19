@@ -14,7 +14,9 @@ export interface SessionClaims {
 
 // Retorna as claims se o token for valido (assinatura + expiracao), senao null.
 export function verifySessionToken(token: string): SessionClaims | null {
-  const secret = process.env.NUVEMSHOP_CLIENT_SECRET ?? "";
+  const secret = process.env.NUVEMSHOP_CLIENT_SECRET;
+  if (!secret?.trim()) return null;
+
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, signatureB64] = parts;
