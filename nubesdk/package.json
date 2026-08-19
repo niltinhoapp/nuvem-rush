@@ -5,7 +5,7 @@
   "description": "Modulo NubeSDK (storefront/checkout) do Nuvem Rush — sinal de carrinho abandonado.",
   "type": "module",
   "scripts": {
-    "dev": "tsup --watch --onSuccess \"npx --yes serve -l 8080 dist\"",
+    "dev": "tsup --watch --onSuccess \"node scripts/dev-server.mjs\"",
     "build": "tsup",
     "typecheck": "tsc --noEmit"
   },
