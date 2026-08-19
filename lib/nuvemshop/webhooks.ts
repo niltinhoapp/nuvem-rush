@@ -11,8 +11,6 @@ export const REQUIRED_WEBHOOK_EVENTS = [
   "order/paid",
   "order/fulfilled",
   "order/cancelled",
-  "product/created",
-  "product/updated",
   "app/uninstalled",
 ] as const;
 
