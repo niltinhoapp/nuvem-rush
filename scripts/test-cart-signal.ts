@@ -59,6 +59,46 @@ async function main() {
     check("1 endpoint NAO usa sufixo generico como prova de tenant", !route.includes("isAllowedOrigin"));
   }
 
+  // ---- P0: cart_signals e somente telemetria, sem caminho comercial ----
+  {
+    const vercelConfig = readFileSync("vercel.json", "utf8");
+    const cronRoute = readFileSync("app/api/cron/cart-signals/route.ts", "utf8");
+    const storefrontRoute = readFileSync("app/api/storefront/cart-signal/route.ts", "utf8");
+    const forbiddenCommercialOperations = [
+      "collectionGroup",
+      "listCheckouts",
+      "syncAbandonedCheckout",
+      "enrollCartOnce",
+      "cart_enrollments",
+      "enrollments",
+      "jobs",
+    ];
+
+    check(
+      "P0 vercel nao agenda cron comercial de cart_signals",
+      !vercelConfig.includes("/api/cron/cart-signals"),
+    );
+    check("P0 rota cron esta disabled", cronRoute.includes("disabled"));
+    check(
+      "P0 rota cron declara telemetria only",
+      cronRoute.includes("cart_signals_telemetry_only"),
+    );
+    check(
+      "P0 rota cron nao contem operacoes comerciais",
+      forbiddenCommercialOperations.every((operation) => !cronRoute.includes(operation)),
+    );
+    check(
+      "P0 storefront continua persistindo cart_signals",
+      storefrontRoute.includes('col(storeId, "cart_signals")'),
+    );
+    check(
+      "P0 storefront continua sem efeitos comerciais",
+      forbiddenCommercialOperations
+        .filter((operation) => operation !== "collectionGroup")
+        .every((operation) => !storefrontRoute.includes(operation)),
+    );
+  }
+
   console.log(`\n${pass} passaram, ${fail} falharam`);
   process.exit(fail === 0 ? 0 : 1);
 }
