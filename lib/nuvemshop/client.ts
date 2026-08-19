@@ -6,6 +6,41 @@ import type { NsOrder, NsProduct, NsCheckout } from "./types";
 
 const API_BASE = "https://api.tiendanube.com/v1";
 
+export class NuvemshopPaginationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NuvemshopPaginationError";
+  }
+}
+
+function parseTotalCount(value: string | null): number {
+  if (value == null || !/^\d+$/.test(value)) {
+    throw new NuvemshopPaginationError("x-total-count ausente ou invalido");
+  }
+  return Number(value);
+}
+
+function nextCheckoutPage(link: string | null, storeId: string): number | null {
+  if (!link) return null;
+  for (const part of link.split(",")) {
+    const match = part.trim().match(/^<([^>]+)>\s*;\s*rel="?([^";]+)"?$/i);
+    if (!match || match[2] !== "next") continue;
+    const url = new URL(match[1]!);
+    if (url.origin !== new URL(API_BASE).origin) {
+      throw new NuvemshopPaginationError("Link next aponta para origem inesperada");
+    }
+    if (url.pathname !== `/v1/${storeId}/checkouts`) {
+      throw new NuvemshopPaginationError("Link next aponta para recurso inesperado");
+    }
+    const rawPage = url.searchParams.get("page");
+    if (!rawPage || !/^\d+$/.test(rawPage) || Number(rawPage) < 1) {
+      throw new NuvemshopPaginationError("Link next sem pagina valida");
+    }
+    return Number(rawPage);
+  }
+  return null;
+}
+
 export class NuvemshopClient {
   constructor(
     private readonly storeId: string,
@@ -13,6 +48,13 @@ export class NuvemshopClient {
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    return (await this.requestWithHeaders<T>(path, init)).data;
+  }
+
+  private async requestWithHeaders<T>(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<{ data: T; headers: Headers }> {
     const res = await fetch(`${API_BASE}/${this.storeId}/${path}`, {
       ...init,
       headers: {
@@ -25,7 +67,7 @@ export class NuvemshopClient {
     if (!res.ok) {
       throw new Error(`Nuvemshop API ${res.status}: ${await res.text()}`);
     }
-    return (await res.json()) as T;
+    return { data: (await res.json()) as T, headers: res.headers };
   }
 
   listProducts(page = 1, perPage = 100) {
@@ -55,10 +97,60 @@ export class NuvemshopClient {
   }
 
   // Carrinhos abandonados criados a partir de `since` (ISO 8601), mais recentes.
-  listCheckouts(sinceISO?: string, perPage = 50) {
-    const q = new URLSearchParams({ per_page: String(perPage), sort_by: "created-at-descending" });
-    if (sinceISO) q.set("created_at_min", sinceISO);
-    return this.request<NsCheckout[]>(`checkouts?${q.toString()}`);
+  async listCheckouts(sinceISO?: string, perPage = 50): Promise<NsCheckout[]> {
+    if (!Number.isInteger(perPage) || perPage < 1 || perPage > 200) {
+      throw new NuvemshopPaginationError("perPage deve estar entre 1 e 200");
+    }
+
+    const all: NsCheckout[] = [];
+    const ids = new Set<string>();
+    const visitedPages = new Set<number>();
+    let expectedTotal: number | null = null;
+    let page = 1;
+
+    while (true) {
+      if (visitedPages.has(page)) {
+        throw new NuvemshopPaginationError("ciclo detectado na paginacao");
+      }
+      visitedPages.add(page);
+
+      const q = new URLSearchParams({
+        page: String(page),
+        per_page: String(perPage),
+        sort_by: "created-at-descending",
+      });
+      if (sinceISO) q.set("created_at_min", sinceISO);
+
+      const response = await this.requestWithHeaders<NsCheckout[]>(`checkouts?${q.toString()}`);
+      const pageTotal = parseTotalCount(response.headers.get("x-total-count"));
+      if (expectedTotal == null) expectedTotal = pageTotal;
+      else if (pageTotal !== expectedTotal) {
+        throw new NuvemshopPaginationError("x-total-count mudou durante a paginacao");
+      }
+
+      for (const checkout of response.data) {
+        const id = String(checkout.id);
+        if (ids.has(id)) {
+          throw new NuvemshopPaginationError("checkout duplicado entre paginas");
+        }
+        ids.add(id);
+        all.push(checkout);
+      }
+
+      const nextPage = nextCheckoutPage(response.headers.get("link"), this.storeId);
+      if (nextPage == null) {
+        if (all.length !== expectedTotal) {
+          throw new NuvemshopPaginationError(
+            `snapshot parcial: esperados ${expectedTotal}, recebidos ${all.length}`,
+          );
+        }
+        return all;
+      }
+      if (nextPage <= page || all.length >= expectedTotal) {
+        throw new NuvemshopPaginationError("Link next inconsistente com o snapshot");
+      }
+      page = nextPage;
+    }
   }
 
   // Registra um webhook para um evento (ex.: "order/paid").
