@@ -5,6 +5,48 @@
 import type { NsOrder, NsProduct, NsCheckout } from "./types";
 
 const API_BASE = "https://api.tiendanube.com/v1";
+const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_READ_RETRIES = 2;
+const MAX_RETRY_DELAY_MS = 5_000;
+
+export class NuvemshopApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly transient: boolean,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(`Nuvemshop API ${status}`);
+    this.name = "NuvemshopApiError";
+  }
+}
+
+export class NuvemshopRequestError extends Error {
+  constructor(message: string, public readonly transient: boolean) {
+    super(message);
+    this.name = "NuvemshopRequestError";
+  }
+}
+
+type ClientOptions = {
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+  now?: () => number;
+  timeoutMs?: number;
+  maxReadRetries?: number;
+};
+
+function retryDelay(headers: Headers, now: number): number | undefined {
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+    const date = Date.parse(retryAfter);
+    if (Number.isFinite(date)) return Math.max(0, date - now);
+  }
+  const reset = Number(headers.get("x-rate-limit-reset"));
+  return Number.isFinite(reset) && reset >= 0 ? reset : undefined;
+}
 
 export class NuvemshopPaginationError extends Error {
   constructor(message: string) {
@@ -45,6 +87,7 @@ export class NuvemshopClient {
   constructor(
     private readonly storeId: string,
     private readonly accessToken: string,
+    private readonly options: ClientOptions = {},
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -55,19 +98,57 @@ export class NuvemshopClient {
     path: string,
     init: RequestInit = {},
   ): Promise<{ data: T; headers: Headers }> {
-    const res = await fetch(`${API_BASE}/${this.storeId}/${path}`, {
-      ...init,
-      headers: {
-        Authentication: `bearer ${this.accessToken}`,
-        "User-Agent": process.env.NUVEMSHOP_USER_AGENT ?? "Nuvem Rush",
-        "Content-Type": "application/json",
-        ...init.headers,
-      },
-    });
-    if (!res.ok) {
-      throw new Error(`Nuvemshop API ${res.status}: ${await res.text()}`);
+    const method = (init.method ?? "GET").toUpperCase();
+    const idempotent = method === "GET" || method === "HEAD";
+    const maxRetries = idempotent ? (this.options.maxReadRetries ?? DEFAULT_READ_RETRIES) : 0;
+    const fetchImpl = this.options.fetchImpl ?? fetch;
+    const sleep = this.options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const random = this.options.random ?? Math.random;
+    const now = this.options.now ?? Date.now;
+
+    for (let attempt = 0; ; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      );
+      try {
+        const res = await fetchImpl(`${API_BASE}/${this.storeId}/${path}`, {
+          ...init,
+          signal: controller.signal,
+          headers: {
+            Authentication: `bearer ${this.accessToken}`,
+            "User-Agent": process.env.NUVEMSHOP_USER_AGENT ?? "Nuvem Rush",
+            "Content-Type": "application/json",
+            ...init.headers,
+          },
+        });
+        if (res.ok) {
+          return { data: (await res.json()) as T, headers: res.headers };
+        }
+
+        const transient = res.status === 429 || res.status >= 500;
+        const headerDelay = retryDelay(res.headers, now());
+        const error = new NuvemshopApiError(res.status, transient, headerDelay);
+        if (!transient || attempt >= maxRetries) throw error;
+        const backoff = Math.min(
+          MAX_RETRY_DELAY_MS,
+          headerDelay ?? (250 * (2 ** attempt) + Math.floor(random() * 100)),
+        );
+        await sleep(backoff);
+      } catch (error) {
+        if (error instanceof NuvemshopApiError) throw error;
+        const aborted = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+        const wrapped = new NuvemshopRequestError(
+          aborted ? "Nuvemshop API timeout" : "Nuvemshop API network error",
+          true,
+        );
+        if (attempt >= maxRetries) throw wrapped;
+        await sleep(Math.min(MAX_RETRY_DELAY_MS, 250 * (2 ** attempt) + Math.floor(random() * 100)));
+      } finally {
+        clearTimeout(timeout);
+      }
     }
-    return { data: (await res.json()) as T, headers: res.headers };
   }
 
   listProducts(page = 1, perPage = 100) {
