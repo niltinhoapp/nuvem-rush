@@ -26,6 +26,10 @@ async function main() {
   const { syncAbandonedCheckout } = await import("../lib/nuvemshop/carts");
   const { syncOrder } = await import("../lib/nuvemshop/sync");
   const { NuvemshopClient } = await import("../lib/nuvemshop/client");
+  const {
+    buildStoreInstallData,
+    isFirstCommercialInstall,
+  } = await import("../lib/nuvemshop/store-install");
 
   let passed = 0;
   const check = (label: string, condition: boolean) => {
@@ -315,7 +319,11 @@ async function main() {
       === JSON.stringify(["redactedAt", "redactionRequestId", "status", "tombstoneVersion"].sort())
       && tombstone.status === "redacted",
   );
-  check("todas as subcolecoes DELETE vazias", Object.keys(storeA).length === 1);
+  check(
+    "somente lgpd_suppressions sobrevive a purga tenant",
+    JSON.stringify(Object.keys(storeA).sort())
+      === JSON.stringify(["lgpd_suppressions", "root"].sort()),
+  );
   check(
     "tokens/config/dominios/quotas removidos",
     !["accessToken", "whatsapp", "domains", "originalDomain", "quotas", "plan"]
@@ -433,6 +441,109 @@ async function main() {
     80_000,
   );
   check("customers redact antes/depois de store redact e seguro", customerAfterStore.deduped);
+
+  // Fluxo completo dos dois blockers: suppression sobrevive ao store/redact,
+  // OAuth recria uma instalacao comercial limpa e syncs futuros continuam
+  // impedindo a reintroducao do titular X.
+  await seed("store-reinstall");
+  await seed("store-reinstall-other");
+  await processCustomerRedact(
+    firestoreCustomerRedactRepository,
+    customerPayload("store-reinstall"),
+    90_000,
+  );
+  const suppressionBefore = await db.doc("stores/store-reinstall").collection("lgpd_suppressions").get();
+  check("suppression X existe antes de store redact", suppressionBefore.size > 0);
+  await processStoreRedact(
+    firestoreStoreRedactRepository,
+    storePayload("store-reinstall"),
+    100_000,
+  );
+  const suppressionAfter = await db.doc("stores/store-reinstall").collection("lgpd_suppressions").get();
+  check(
+    "lgpd_suppressions e preservada pelo store redact",
+    suppressionAfter.size === suppressionBefore.size,
+  );
+  const redactedRoot = await db.doc("stores/store-reinstall").get();
+  const installState = { exists: redactedRoot.exists, status: redactedRoot.data()?.status };
+  check("tombstone redacted e first install comercial", isFirstCommercialInstall(installState));
+  const reinstallAt = 110_000;
+  const reinstallData = buildStoreInstallData(
+    "store-reinstall",
+    { accessToken: "new-oauth-token", scope: "read_orders,write_webhooks" },
+    installState,
+    reinstallAt,
+  );
+  await db.doc("stores/store-reinstall").set(reinstallData);
+  const reinstalled = (await db.doc("stores/store-reinstall").get()).data();
+  check(
+    "reinstall recria defaults sem restaurar configuracao antiga",
+    reinstalled?.status === "active"
+      && reinstalled?.accessToken === "new-oauth-token"
+      && reinstalled?.scope === "read_orders,write_webhooks"
+      && reinstalled?.plan === "essencial"
+      && reinstalled?.installedAt === reinstallAt
+      && reinstalled?.quotas?.dispatchesMonthUsed === 0
+      && reinstalled?.quotas?.whatsappMonthUsed === 0
+      && reinstalled?.whatsapp == null
+      && reinstalled?.domains == null
+      && reinstalled?.originalDomain == null
+      && reinstalled?.webhookRegistration == null
+      && reinstalled?.redactedAt == null
+      && reinstalled?.redactionRequestId == null,
+  );
+  const originalGetOrder = NuvemshopClient.prototype.getOrder;
+  NuvemshopClient.prototype.getOrder = async function () {
+    return {
+      id: 1001,
+      customer: {
+        id: pii.customerId,
+        name: pii.name,
+        email: pii.email,
+        phone: pii.phone,
+      },
+      total: "1",
+      products: [],
+    };
+  };
+  await syncOrder("store-reinstall", "fixture-token", "1001");
+  await syncAbandonedCheckout("store-reinstall", {
+    id: "checkout-x-after-reinstall",
+    contact_name: pii.name,
+    contact_email: pii.email,
+    contact_phone: pii.phone,
+    total: "1",
+    products: [],
+    abandoned_checkout_url: pii.recoveryUrl,
+  });
+  const afterSuppressedSync = JSON.stringify(await storeSnapshot("store-reinstall"));
+  check(
+    "syncOrder e checkout nao reintroduzem PII de X",
+    !afterSuppressedSync.includes(pii.name)
+      && !afterSuppressedSync.includes(pii.email)
+      && !afterSuppressedSync.includes(pii.phone)
+      && !afterSuppressedSync.includes(pii.customerId)
+      && !afterSuppressedSync.includes(pii.recoveryUrl),
+  );
+  const customerY = {
+    id: "customer-y",
+    name: "Customer Y",
+    email: "customer-y@example.com",
+    phone: "+55 11 97777-0000",
+  };
+  NuvemshopClient.prototype.getOrder = async function () {
+    return { id: 1002, customer: customerY, total: "2", products: [] };
+  };
+  await syncOrder("store-reinstall", "fixture-token", "1002");
+  NuvemshopClient.prototype.getOrder = originalGetOrder;
+  const yContacts = await db.doc("stores/store-reinstall").collection("contacts")
+    .where("email", "==", customerY.email).get();
+  check("cliente Y nao suprimido funciona normalmente", yContacts.size === 1);
+  const otherStore = JSON.stringify(await storeSnapshot("store-reinstall-other"));
+  check(
+    "mesmo email em outra store nao e afetado",
+    otherStore.includes(pii.email) && otherStore.includes(pii.name),
+  );
 
   check("fixture cobre todas as colecoes relevantes", collections.length === 15);
   console.log(`\n${passed} testes store/redact no Firestore Emulator passaram`);

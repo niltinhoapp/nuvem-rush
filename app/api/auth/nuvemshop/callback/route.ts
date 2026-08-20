@@ -5,7 +5,10 @@ import { exchangeCodeForToken } from "@/lib/nuvemshop/oauth";
 import { NuvemshopClient } from "@/lib/nuvemshop/client";
 import { registerRequiredWebhooks } from "@/lib/nuvemshop/webhook-registration";
 import { storeRef } from "@/lib/firebase/admin";
-import { buildStoreInstallData } from "@/lib/nuvemshop/store-install";
+import {
+  buildStoreInstallData,
+  isFirstCommercialInstall,
+} from "@/lib/nuvemshop/store-install";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -18,15 +21,22 @@ export async function GET(req: NextRequest) {
     const storeId = String(token.user_id);
     const ref = storeRef(storeId);
     const existingStore = await ref.get();
+    const existing = {
+      exists: existingStore.exists,
+      status: existingStore.data()?.status,
+    };
+    const firstCommercialInstall = isFirstCommercialInstall(existing);
 
     // TODO: criptografar accessToken em repouso (KMS) antes de persistir.
     await ref.set(
       buildStoreInstallData(
         storeId,
         { accessToken: token.access_token, scope: token.scope },
-        existingStore.exists,
+        existing,
       ),
-      { merge: true },
+      // Um tombstone redacted inicia uma instalacao comercial limpa. O set
+      // substitui somente o documento raiz; lgpd_suppressions permanece.
+      { merge: !firstCommercialInstall },
     );
 
     // Registra os webhooks obrigatorios apontando para o nosso receiver.

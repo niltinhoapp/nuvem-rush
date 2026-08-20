@@ -6,6 +6,7 @@ import type { StoreRedactEvidence, StoreRedactRepository } from "./storeRedact";
 
 const PROCESSING_LEASE_MS = 10 * 60_000;
 const EVIDENCE_COLLECTION = "lgpd_store_redactions";
+const PRESERVED_TENANT_COLLECTIONS = new Set(["lgpd_suppressions"]);
 
 type StoreRedactHooks = {
   afterCommercialBlock?: (storeId: string) => Promise<void>;
@@ -130,6 +131,9 @@ export function createFirestoreStoreRedactRepository(
       // Descoberta dinâmica: não depende de uma lista que possa ficar obsoleta.
       const collections = await storeRef(payload.store_id).listCollections();
       for (const collection of collections.sort((a, b) => a.id.localeCompare(b.id))) {
+        // Suppressions sao a unica memoria necessaria para impedir que uma
+        // futura reinstalacao reintroduza PII de titulares ja redigidos.
+        if (PRESERVED_TENANT_COLLECTIONS.has(collection.id)) continue;
         const count = await collection.count().get();
         affected.topLevelDocumentsObserved += count.data().count;
         await db.recursiveDelete(collection);
