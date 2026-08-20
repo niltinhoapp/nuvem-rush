@@ -3,6 +3,7 @@
 import { col } from "@/lib/firebase/admin";
 import type { NsCheckout } from "./types";
 import type { Cart, Contact, OrderItem } from "@/types";
+import { findSuppressedContactId } from "@/lib/lgpd/firestore";
 
 const num = (v: string | number | undefined | null): number => Number(v ?? 0) || 0;
 
@@ -11,20 +12,22 @@ const num = (v: string | number | undefined | null): number => Number(v ?? 0) ||
 async function upsertCartContact(storeId: string, raw: NsCheckout): Promise<Contact> {
   const email = raw.contact_email ?? null;
   const phone = raw.contact_phone ?? null;
-  const contactId = email ? `email:${email}` : phone ? `phone:${phone}` : `checkout:${raw.id}`;
+  const suppressedContactId = await findSuppressedContactId(storeId, { email, phone });
+  const contactId = suppressedContactId
+    ?? (email ? `email:${email}` : phone ? `phone:${phone}` : `checkout:${raw.id}`);
   const ref = col(storeId, "contacts").doc(contactId);
 
   const prev = (await ref.get()).data() as Contact | undefined;
   const contact: Contact = {
     contactId,
     nsCustomerId: prev?.nsCustomerId ?? null,
-    name: raw.contact_name ?? prev?.name ?? null,
-    email: email ?? prev?.email ?? null,
-    phone: phone ?? prev?.phone ?? null,
-    tags: prev?.tags ?? [],
+    name: suppressedContactId ? null : (raw.contact_name ?? prev?.name ?? null),
+    email: suppressedContactId ? null : (email ?? prev?.email ?? null),
+    phone: suppressedContactId ? null : (phone ?? prev?.phone ?? null),
+    tags: suppressedContactId ? [] : (prev?.tags ?? []),
     ordersCount: prev?.ordersCount ?? 0,
     totalSpent: prev?.totalSpent ?? 0,
-    optOut: prev?.optOut ?? false,
+    optOut: suppressedContactId ? true : (prev?.optOut ?? false),
     lastOrderAt: prev?.lastOrderAt ?? null,
   };
   await ref.set(contact, { merge: true });
@@ -59,7 +62,8 @@ export async function syncAbandonedCheckout(
     abandonedAt: Date.now(),
     status: "abandoned",
   };
-  await cartRef.set(cart, { merge: true });
+  // Um titular suprimido nao pode ter recoveryUrl/checkout persistido novamente.
+  if (!contact.optOut) await cartRef.set(cart, { merge: true });
 
   return { cart, contact };
 }

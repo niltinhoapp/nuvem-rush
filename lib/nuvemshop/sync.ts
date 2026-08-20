@@ -4,6 +4,7 @@ import { col } from "@/lib/firebase/admin";
 import { NuvemshopClient } from "./client";
 import type { LocalizedString, NsOrder, NsProduct, NsTrackingInfo } from "./types";
 import type { Contact, Order, OrderItem, Product } from "@/types";
+import { findSuppressedContactId } from "@/lib/lgpd/firestore";
 
 function loc(value: LocalizedString | undefined): string {
   if (!value) return "";
@@ -54,8 +55,16 @@ async function getProductMeta(
 async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> {
   const nsCustomerId = order.customer?.id ? String(order.customer.id) : null;
   const email = order.customer?.email ?? order.contact_email ?? null;
+  const phone = order.customer?.phone ?? order.contact_phone ?? null;
+  const suppressedContactId = await findSuppressedContactId(storeId, {
+    id: nsCustomerId ?? undefined,
+    email,
+    phone,
+  });
   // Chave estavel: id do cliente, senao o e-mail.
-  const contactId = nsCustomerId ?? (email ? `email:${email}` : `order:${order.id}`);
+  const contactId = suppressedContactId
+    ?? nsCustomerId
+    ?? (email ? `email:${email}` : `order:${order.id}`);
   const ref = col(storeId, "contacts").doc(contactId);
 
   const prev = await ref.get();
@@ -63,14 +72,14 @@ async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> 
 
   const contact: Contact = {
     contactId,
-    nsCustomerId,
-    name: order.customer?.name ?? order.contact_name ?? prevData?.name ?? null,
-    email,
-    phone: order.customer?.phone ?? order.contact_phone ?? null,
-    tags: prevData?.tags ?? [],
+    nsCustomerId: suppressedContactId ? null : nsCustomerId,
+    name: suppressedContactId ? null : (order.customer?.name ?? order.contact_name ?? prevData?.name ?? null),
+    email: suppressedContactId ? null : email,
+    phone: suppressedContactId ? null : phone,
+    tags: suppressedContactId ? [] : (prevData?.tags ?? []),
     ordersCount: (prevData?.ordersCount ?? 0) + 1,
     totalSpent: (prevData?.totalSpent ?? 0) + num(order.total),
-    optOut: prevData?.optOut ?? false,
+    optOut: suppressedContactId ? true : (prevData?.optOut ?? false),
     lastOrderAt: Date.now(),
   };
   await ref.set(contact, { merge: true });

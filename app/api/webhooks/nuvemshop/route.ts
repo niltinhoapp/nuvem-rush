@@ -7,6 +7,12 @@ import { handleOrderEvent } from "@/lib/rules/process";
 import { eventKey } from "@/lib/webhooks/idempotency";
 import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
 import { handleAppUninstalled } from "@/lib/lifecycle/uninstall";
+import { lgpdEventSchema } from "@/lib/lgpd/model";
+import { processCustomerRedact } from "@/lib/lgpd/customerRedact";
+import {
+  firestoreCustomerRedactRepository,
+  registerMinimalLgpdRequest,
+} from "@/lib/lgpd/firestore";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -21,11 +27,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "assinatura invalida" }, { status: 401 });
   }
 
-  const payload = JSON.parse(raw) as {
+  let payload: {
     event: string;
     store_id: number;
     id?: number; // id do recurso (ex.: pedido)
   };
+  try {
+    payload = JSON.parse(raw) as typeof payload;
+  } catch {
+    return NextResponse.json({ error: "payload invalido" }, { status: 400 });
+  }
+  if (!payload || typeof payload.event !== "string" || payload.store_id == null) {
+    return NextResponse.json({ error: "payload invalido" }, { status: 400 });
+  }
   const storeId = String(payload.store_id);
 
   switch (payload.event) {
@@ -35,22 +49,51 @@ export async function POST(req: NextRequest) {
       // Dados permanecem retidos. Purga/anonimizacao exige fluxo LGPD separado.
       break;
 
-    case "store/redact":
-    case "customers/redact":
-      // LGPD: registra a solicitacao de remocao para processamento.
-      // TODO: remover/anonimizar dados pessoais conforme o payload.
-      await col(storeId, "lgpd_requests").add({
-        type: payload.event, payload, status: "pending", at: Date.now(),
-      });
-      break;
+    case "store/redact": {
+      // Registro mínimo somente: a exclusão da loja ainda não é executada.
+      const parsed = lgpdEventSchema.safeParse(payload);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "payload LGPD invalido" }, { status: 400 });
+      }
+      try {
+        const result = await registerMinimalLgpdRequest(parsed.data);
+        return NextResponse.json({ ok: true, queued: true, deduped: result.deduped });
+      } catch {
+        return NextResponse.json({ error: "falha ao registrar LGPD" }, { status: 500 });
+      }
+    }
 
-    case "customers/data_request":
-      // LGPD: titular solicitou os dados que mantemos sobre ele.
-      // TODO: compilar e disponibilizar os dados do cliente referenciado.
-      await col(storeId, "lgpd_requests").add({
-        type: payload.event, payload, status: "pending", at: Date.now(),
-      });
-      break;
+    case "customers/data_request": {
+      const parsed = lgpdEventSchema.safeParse(payload);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "payload LGPD invalido" }, { status: 400 });
+      }
+      try {
+        const result = await registerMinimalLgpdRequest(parsed.data);
+        return NextResponse.json({ ok: true, queued: true, deduped: result.deduped });
+      } catch {
+        return NextResponse.json({ error: "falha ao registrar LGPD" }, { status: 500 });
+      }
+    }
+
+    case "customers/redact": {
+      const parsed = lgpdEventSchema.safeParse(payload);
+      if (!parsed.success || !parsed.data.customer) {
+        return NextResponse.json({ error: "payload LGPD invalido" }, { status: 400 });
+      }
+      try {
+        const result = await processCustomerRedact(
+          firestoreCustomerRedactRepository,
+          parsed.data,
+        );
+        return NextResponse.json({ ok: true, completed: true, deduped: result.deduped });
+      } catch {
+        return NextResponse.json({ error: "falha ao processar LGPD" }, { status: 500 });
+      }
+    }
+
+    /* app/uninstalled continua no fluxo validado acima; store/redact e
+       data_request ficam apenas registrados, sem purge/entrega nesta fase. */
 
     // ---- Pedidos -> motor de regras ----
     case "order/paid":
