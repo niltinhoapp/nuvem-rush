@@ -10,6 +10,43 @@ export interface NuvemshopToken {
   user_id: number; // = storeId
 }
 
+export class NuvemshopOAuthResponseError extends Error {
+  constructor(message = "Resposta OAuth invalida da Nuvemshop") {
+    super(message);
+    this.name = "NuvemshopOAuthResponseError";
+  }
+}
+
+export function parseNuvemshopTokenResponse(value: unknown): NuvemshopToken {
+  if (!value || typeof value !== "object") {
+    throw new NuvemshopOAuthResponseError();
+  }
+
+  const response = value as Record<string, unknown>;
+  const accessToken = typeof response.access_token === "string"
+    ? response.access_token.trim()
+    : "";
+  const userId = response.user_id;
+  const scope = response.scope;
+
+  if (
+    !accessToken
+    || typeof userId !== "number"
+    || !Number.isSafeInteger(userId)
+    || userId <= 0
+    || typeof scope !== "string"
+  ) {
+    throw new NuvemshopOAuthResponseError();
+  }
+
+  return {
+    access_token: accessToken,
+    token_type: "bearer",
+    scope,
+    user_id: userId,
+  };
+}
+
 export function authorizeUrl(): string {
   return `https://www.tiendanube.com/apps/${process.env.NUVEMSHOP_APP_ID}/authorize`;
 }
@@ -27,8 +64,15 @@ export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Falha ao trocar code por token: ${res.status} ${body}`);
+    throw new Error(`Falha ao trocar code por token: HTTP ${res.status}`);
   }
-  return (await res.json()) as NuvemshopToken;
+
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new NuvemshopOAuthResponseError();
+  }
+
+  return parseNuvemshopTokenResponse(payload);
 }
