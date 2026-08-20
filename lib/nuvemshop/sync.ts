@@ -1,10 +1,11 @@
 // Sincroniza pedidos e contatos da API Nuvemshop para o Firestore.
 // Enriquece cada item do pedido com categoria/marca (buscadas do produto, com cache).
-import { col } from "@/lib/firebase/admin";
+import { db, col, storeRef } from "@/lib/firebase/admin";
 import { NuvemshopClient } from "./client";
 import type { LocalizedString, NsOrder, NsProduct, NsTrackingInfo } from "./types";
 import type { Contact, Order, OrderItem, Product } from "@/types";
 import { findSuppressedContactId } from "@/lib/lgpd/firestore";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 function loc(value: LocalizedString | undefined): string {
   if (!value) return "";
@@ -47,7 +48,13 @@ async function getProductMeta(
     categoryIds,
     price: 0,
   };
-  await ref.set(product, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const store = await tx.get(storeRef(storeId));
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    tx.set(ref, product, { merge: true });
+  });
   return { categoryIds, brand };
 }
 
@@ -67,23 +74,30 @@ async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> 
     ?? (email ? `email:${email}` : `order:${order.id}`);
   const ref = col(storeId, "contacts").doc(contactId);
 
-  const prev = await ref.get();
-  const prevData = prev.data() as Contact | undefined;
-
-  const contact: Contact = {
-    contactId,
-    nsCustomerId: suppressedContactId ? null : nsCustomerId,
-    name: suppressedContactId ? null : (order.customer?.name ?? order.contact_name ?? prevData?.name ?? null),
-    email: suppressedContactId ? null : email,
-    phone: suppressedContactId ? null : phone,
-    tags: suppressedContactId ? [] : (prevData?.tags ?? []),
-    ordersCount: (prevData?.ordersCount ?? 0) + 1,
-    totalSpent: (prevData?.totalSpent ?? 0) + num(order.total),
-    optOut: suppressedContactId ? true : (prevData?.optOut ?? false),
-    lastOrderAt: Date.now(),
-  };
-  await ref.set(contact, { merge: true });
-  return contact;
+  return db.runTransaction(async (tx) => {
+    const [store, prev] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(ref),
+    ]);
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    const prevData = prev.data() as Contact | undefined;
+    const contact: Contact = {
+      contactId,
+      nsCustomerId: suppressedContactId ? null : nsCustomerId,
+      name: suppressedContactId ? null : (order.customer?.name ?? order.contact_name ?? prevData?.name ?? null),
+      email: suppressedContactId ? null : email,
+      phone: suppressedContactId ? null : phone,
+      tags: suppressedContactId ? [] : (prevData?.tags ?? []),
+      ordersCount: (prevData?.ordersCount ?? 0) + 1,
+      totalSpent: (prevData?.totalSpent ?? 0) + num(order.total),
+      optOut: suppressedContactId ? true : (prevData?.optOut ?? false),
+      lastOrderAt: Date.now(),
+    };
+    tx.set(ref, contact, { merge: true });
+    return contact;
+  });
 }
 
 export type OrderEvent = "created" | "paid" | "fulfilled" | "cancelled";
@@ -165,7 +179,13 @@ export async function syncOrder(
     ...(event === "paid" ? { paidAt: Date.now() } : {}),
     ...(event === "fulfilled" ? { fulfilledAt: Date.now() } : {}),
   };
-  await orderRef.set(order, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const store = await tx.get(storeRef(storeId));
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    tx.set(orderRef, order, { merge: true });
+  });
 
   return { order, contact };
 }

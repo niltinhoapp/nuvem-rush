@@ -2,7 +2,7 @@
 // Valida HMAC, trata eventos LGPD na hora e enfileira pedidos para o motor.
 import { NextRequest, NextResponse } from "next/server";
 import { verifyHmac } from "@/lib/nuvemshop/webhooks";
-import { col } from "@/lib/firebase/admin";
+import { db, col, storeRef } from "@/lib/firebase/admin";
 import { handleOrderEvent } from "@/lib/rules/process";
 import { eventKey } from "@/lib/webhooks/idempotency";
 import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
@@ -13,6 +13,9 @@ import {
   firestoreCustomerRedactRepository,
   registerMinimalLgpdRequest,
 } from "@/lib/lgpd/firestore";
+import { processStoreRedact } from "@/lib/lgpd/storeRedact";
+import { firestoreStoreRedactRepository } from "@/lib/lgpd/storeRedact.firestore";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -50,16 +53,18 @@ export async function POST(req: NextRequest) {
       break;
 
     case "store/redact": {
-      // Registro mínimo somente: a exclusão da loja ainda não é executada.
       const parsed = lgpdEventSchema.safeParse(payload);
       if (!parsed.success) {
         return NextResponse.json({ error: "payload LGPD invalido" }, { status: 400 });
       }
       try {
-        const result = await registerMinimalLgpdRequest(parsed.data);
-        return NextResponse.json({ ok: true, queued: true, deduped: result.deduped });
+        const result = await processStoreRedact(
+          firestoreStoreRedactRepository,
+          parsed.data,
+        );
+        return NextResponse.json({ ok: true, completed: true, deduped: result.deduped });
       } catch {
-        return NextResponse.json({ error: "falha ao registrar LGPD" }, { status: 500 });
+        return NextResponse.json({ error: "falha ao processar LGPD" }, { status: 500 });
       }
     }
 
@@ -128,10 +133,14 @@ export async function POST(req: NextRequest) {
     }
 
     default:
-      await col(storeId, "logs").add({
-        type: "webhook_unhandled",
-        event: payload.event,
-        at: Date.now(),
+      await db.runTransaction(async (tx) => {
+        const store = await tx.get(storeRef(storeId));
+        if (!isStoreCommerciallyActive(store.data()?.status)) return;
+        tx.create(col(storeId, "logs").doc(), {
+          type: "webhook_unhandled",
+          event: payload.event,
+          at: Date.now(),
+        });
       });
   }
 

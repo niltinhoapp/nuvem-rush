@@ -8,7 +8,7 @@ export interface Store {
   accessToken: string; // criptografado em repouso
   scope: string;
   plan: Plan;
-  status: "active" | "uninstalled";
+  status: "active" | "uninstalled" | "redacting" | "redacted";
   installedAt: number;
   // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
   // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).

@@ -9,7 +9,7 @@ export async function handleAppUninstalled(
   const ref = storeRef(storeId);
   const alreadyUninstalled = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    if (snap.data()?.status === "uninstalled") return true;
+    if (["uninstalled", "redacting", "redacted"].includes(snap.data()?.status)) return true;
     tx.set(ref, { status: "uninstalled", uninstalledAt: now }, { merge: true });
     return false;
   });

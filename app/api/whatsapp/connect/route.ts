@@ -6,7 +6,8 @@
 // GET /api/whatsapp/connect -> status da conexao (para a UI).
 import { NextRequest, NextResponse } from "next/server";
 import { resolveStoreId } from "@/lib/auth/session";
-import { storeRef } from "@/lib/firebase/admin";
+import { db, storeRef } from "@/lib/firebase/admin";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
   exchangeCodeForToken,
   subscribeAppToWaba,
@@ -47,6 +48,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const initialStore = await storeRef(storeId).get();
+    if (!isStoreCommerciallyActive(initialStore.data()?.status)) {
+      return NextResponse.json({ error: "loja inativa" }, { status: 409 });
+    }
+
     // 1. code -> business token do lojista (longa duracao).
     const accessToken = await exchangeCodeForToken(body.code);
 
@@ -84,7 +90,14 @@ export async function POST(req: NextRequest) {
       connectedAt: Date.now(),
       tokenRefreshedAt: Date.now(),
     };
-    await storeRef(storeId).update({ whatsapp });
+    await db.runTransaction(async (tx) => {
+      const ref = storeRef(storeId);
+      const current = await tx.get(ref);
+      if (!isStoreCommerciallyActive(current.data()?.status)) {
+        throw new Error("store_inactive");
+      }
+      tx.update(ref, { whatsapp });
+    });
 
     return NextResponse.json({ connected: true, templateCreated: templateOk });
   } catch (err) {

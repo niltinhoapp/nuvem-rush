@@ -3,11 +3,12 @@
 // frágil; o estado vive em stores/{storeId}/cart_enrollments/{hash(cartId)}:
 //   (ausente) -> enrolling{leaseId,leaseAt} -> enrolled (terminal).
 import { randomUUID } from "node:crypto";
-import { db, col } from "@/lib/firebase/admin";
+import { db, col, storeRef } from "@/lib/firebase/admin";
 import { enrollCartInFlows } from "@/lib/rules/process";
 import { cartKeyHash } from "@/lib/storefront/cartKey";
 import { canClaimEnroll, canFinalizeEnroll, type EnrollDoc } from "@/lib/storefront/enrollLease";
 import type { Cart, Contact } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 // Retorna true se ESTA chamada inscreveu; false se já estava enrolled ou outro
 // worker detém o lease vigente. Se enrollCartInFlows lançar, o lease "enrolling"
@@ -19,7 +20,11 @@ export async function enrollCartOnce(storeId: string, cart: Cart, contact: Conta
 
   // 1) Reivindica o lease atomicamente (fencing por leaseId).
   const claimed = await db.runTransaction(async (tx) => {
-    const s = await tx.get(ref);
+    const [store, s] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(ref),
+    ]);
+    if (!isStoreCommerciallyActive(store.data()?.status)) return false;
     const d = s.exists ? (s.data() as EnrollDoc) : null;
     if (!canClaimEnroll(d, now)) return false; // enrolled OU lease vigente de outro
     tx.set(ref, { status: "enrolling", leaseId, leaseAt: now, cartId: cart.cartId }, { merge: true });

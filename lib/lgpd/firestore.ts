@@ -134,6 +134,16 @@ export const firestoreCustomerRedactRepository: CustomerRedactRepository = {
     return db.runTransaction(async (tx) => {
       const store = await tx.get(storeRef(payload.store_id));
       if (!store.exists) throw new Error("lgpd_store_not_found");
+      if (store.data()?.status === "redacting" || store.data()?.status === "redacted") {
+        return {
+          action: "duplicate" as const,
+          request: {
+            ...minimalRequest(payload, now),
+            status: "completed" as const,
+            completedAt: now,
+          },
+        };
+      }
       const current = await tx.get(ref);
       if (current.exists) {
         const data = current.data() as MinimalLgpdRequest;

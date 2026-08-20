@@ -19,6 +19,7 @@ import { reduceSignalDoc, type SignalDoc } from "@/lib/storefront/signalDoc";
 import { cartKeyHash } from "@/lib/storefront/cartKey";
 import { originMatchesStore, isDomainsCacheFresh, type StoreDomains } from "@/lib/storefront/tenantOrigin";
 import type { Store } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeadersFor(req.headers.get("origin")) });
@@ -53,8 +54,11 @@ export async function POST(req: NextRequest) {
     try {
       const info = await new NuvemshopClient(storeId, store.accessToken).getStore();
       domains = { domains: info.domains ?? [], originalDomain: info.original_domain };
-      await storeRef(storeId)
-        .set({ ...domains, domainsRefreshedAt: now }, { merge: true })
+      await db.runTransaction(async (tx) => {
+        const currentStore = await tx.get(storeRef(storeId));
+        if (!isStoreCommerciallyActive(currentStore.data()?.status)) return;
+        tx.set(storeRef(storeId), { ...domains, domainsRefreshedAt: now }, { merge: true });
+      })
         .catch(() => {}); // cache é otimização; falha ao persistir não bloqueia
     } catch {
       // FAIL CLOSED: sem cache fresco e GET /store falhou -> rejeita o sinal.
@@ -71,7 +75,13 @@ export async function POST(req: NextRequest) {
   const receivedAt = Date.now();
   const ref = col(storeId, "cart_signals").doc(cartKeyHash(cartId));
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
+    const [currentStore, snap] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(ref),
+    ]);
+    if (!isStoreCommerciallyActive(currentStore.data()?.status)) {
+      throw new Error("store_inactive");
+    }
     const existing = snap.exists ? (snap.data() as SignalDoc) : null;
     const nextDoc = reduceSignalDoc(existing, { storeId, cartId, phase, receivedAt });
     tx.set(ref, nextDoc);
