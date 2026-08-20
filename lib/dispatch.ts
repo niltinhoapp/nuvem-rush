@@ -10,6 +10,7 @@ import { canClaim, quotaUsageField, hasQuota, isOrphanProcessing } from "@/lib/d
 import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { runWithFinalCommercialGuard } from "@/lib/dispatch/finalGuard";
 
 export type DispatchResult =
   | { ok: true; status: "sent" | "cancelled" | "skipped" | "failed"; reason?: string };
@@ -54,17 +55,6 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "cancelled", reason: "loja inativa" };
   }
 
-  // Revalida imediatamente antes do efeito externo. Um uninstall cancela os
-  // jobs pendentes; um envio que ja saiu da aplicacao nao pode ser revogado.
-  const preSendStore = await storeRef(storeId).get();
-  const preSendJob = await jobRef.get();
-  if (!isStoreCommerciallyActive(preSendStore.data()?.status) || preSendJob.data()?.status !== "processing") {
-    if (preSendJob.data()?.status === "processing") {
-      await jobRef.update({ status: "cancelled", cancelReason: "store_inactive" });
-    }
-    return { ok: true, status: "cancelled", reason: "loja inativa antes do envio" };
-  }
-
   // Reset mensal de cota (idempotente, sem cron): se o periodo (YYYY-MM) mudou
   // desde a ultima contagem, zera os contadores antes de checar a cota. Sem
   // isso, toda loja bate a cota no 2o mes e o app para silenciosamente.
@@ -101,11 +91,18 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "cancelled", reason: "quota do canal esgotada" };
   }
 
-  // APENAS o envio fica no try que dispara retry. O bookkeeping pos-sucesso
-  // (marcar "sent", cota, log) fica FORA: se ele falhar depois de a mensagem
-  // ja ter saido, o job permanece "processing" e NUNCA e reenviado — evitar
-  // duplicata e mais importante do que o contador ficar perfeito.
-  try {
+  // Guarda FINAL: as leituras ocorrem depois de todo bookkeeping auxiliar e o
+  // provider e iniciado sem nenhum await entre a decisao e a chamada externa.
+  const delivery = await runWithFinalCommercialGuard(
+    async () => {
+      const preSendStore = await storeRef(storeId).get();
+      const preSendJob = await jobRef.get();
+      return {
+        storeActive: isStoreCommerciallyActive(preSendStore.data()?.status),
+        jobProcessing: preSendJob.data()?.status === "processing",
+      };
+    },
+    async () => {
     if (step.action === "email") {
       await sendEmail({ storeId, enrollmentId: job.enrollmentId, step });
     } else if (step.action === "whatsapp") {
@@ -119,7 +116,21 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
       // marcar como "enviado" silenciosamente.
       throw new Error(`acao "${step.action}" nao implementada`);
     }
-  } catch (err) {
+    },
+  );
+
+  if (delivery.status === "guard_failed") throw delivery.error;
+  if (delivery.status === "blocked") {
+    if (delivery.state.jobProcessing) {
+      await jobRef.update({ status: "cancelled", cancelReason: "store_inactive" });
+    }
+    return { ok: true, status: "cancelled", reason: "loja inativa antes do envio" };
+  }
+
+  // APENAS falha do provider dispara retry. O bookkeeping pos-sucesso fica
+  // fora: se falhar apos a mensagem sair, o job nao e reenviado.
+  if (delivery.status === "effect_failed") {
+    const err = delivery.error;
     // Falha de ENVIO: decide retry (transitorio) x falha terminal (permanente
     // ou tentativas esgotadas). Retry volta o job para "scheduled" com runAt no
     // futuro (backoff) — o cron ja filtra por runAt, entao nada mais muda.
@@ -146,13 +157,25 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
     return { ok: true, status: "failed", reason: String(err) };
   }
 
-  // Envio confirmado. A partir daqui NAO ha retry (nao reenviar).
-  await jobRef.update({ status: "sent" });
-  // Incremento ATOMICO da cota (B6): FieldValue.increment evita o
-  // read-modify-write concorrente (lost updates) do codigo anterior.
-  await storeRef(storeId).update({
-    [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
+  // Finalizacao atomica: se o uninstall ocorreu enquanto o provider estava em
+  // andamento, o handler ja cancelou o job e esta transacao NAO pode
+  // sobrescrever cancelled com sent nem consumir cota.
+  const finalized = await db.runTransaction(async (tx) => {
+    const finalStore = await tx.get(storeRef(storeId));
+    const finalJob = await tx.get(jobRef);
+    if (
+      !isStoreCommerciallyActive(finalStore.data()?.status)
+      || finalJob.data()?.status !== "processing"
+    ) return false;
+    tx.update(jobRef, { status: "sent" });
+    tx.update(storeRef(storeId), {
+      [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
+    });
+    return true;
   });
+  if (!finalized) {
+    return { ok: true, status: "cancelled", reason: "loja inativa apos envio" };
+  }
   await col(storeId, "logs").add({
     jobId, channel: step.action, status: "sent", at: Date.now(),
   });
