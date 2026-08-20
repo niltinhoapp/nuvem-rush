@@ -21,6 +21,10 @@ for (const invalidResponse of [
   { ...officialResponse, user_id: undefined },
   { ...officialResponse, user_id: "7865512" },
   { ...officialResponse, user_id: 0 },
+  { ...officialResponse, scope: undefined },
+  { ...officialResponse, scope: ["read_orders", "write_webhooks"] },
+  { error: "invalid_grant", error_description: "invalid authorization code" },
+  "unexpected-response",
 ]) {
   assert.throws(
     () => parseNuvemshopTokenResponse(invalidResponse),
@@ -52,6 +56,24 @@ async function exchangeThenPersist(response: unknown) {
 
 async function main() {
 try {
+  let requestInit: RequestInit | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestInit = init;
+    return new Response(JSON.stringify(officialResponse), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await exchangeCodeForToken("authorization-code-not-for-logs");
+  const headers = new Headers(requestInit?.headers);
+  assert.equal(headers.get("content-type"), "application/x-www-form-urlencoded");
+  assert.ok(requestInit?.body instanceof URLSearchParams);
+  const requestBody = requestInit.body as URLSearchParams;
+  assert.equal(requestBody.get("client_id"), "34663");
+  assert.equal(requestBody.get("client_secret"), "client-secret-not-for-logs");
+  assert.equal(requestBody.get("code"), "authorization-code-not-for-logs");
+  assert.equal(requestBody.has("grant_type"), false);
+
   const valid = await exchangeThenPersist(officialResponse);
   assert.equal(valid.writes, 1);
   assert.equal(valid.token?.access_token, officialResponse.access_token);
@@ -61,6 +83,10 @@ try {
     { ...officialResponse, access_token: "" },
     { ...officialResponse, user_id: undefined },
     { ...officialResponse, user_id: "invalid" },
+    { ...officialResponse, scope: undefined },
+    { ...officialResponse, scope: ["read_orders"] },
+    { error: "invalid_grant", error_description: "invalid authorization code" },
+    { unexpected: true },
   ]) {
     const invalid = await exchangeThenPersist(response);
     assert.equal(invalid.writes, 0, "resposta invalida nao pode alcancar persistencia");
@@ -79,6 +105,18 @@ try {
       return true;
     },
   );
+
+  delete process.env.NUVEMSHOP_CLIENT_SECRET;
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    return new Response();
+  };
+  await assert.rejects(
+    exchangeCodeForToken("authorization-code-not-for-logs"),
+    NuvemshopOAuthResponseError,
+  );
+  assert.equal(fetchCalled, false, "credencial ausente deve falhar antes da rede");
 } finally {
   globalThis.fetch = originalFetch;
   if (originalAppId === undefined) delete process.env.NUVEMSHOP_APP_ID;

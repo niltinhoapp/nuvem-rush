@@ -52,13 +52,19 @@ export function authorizeUrl(): string {
 }
 
 export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken> {
+  const appId = process.env.NUVEMSHOP_APP_ID?.trim();
+  const clientSecret = process.env.NUVEMSHOP_CLIENT_SECRET?.trim();
+
+  if (!appId || !clientSecret) {
+    throw new NuvemshopOAuthResponseError();
+  }
+
   const res = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: process.env.NUVEMSHOP_APP_ID,
-      client_secret: process.env.NUVEMSHOP_CLIENT_SECRET,
-      grant_type: "authorization_code",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: appId,
+      client_secret: clientSecret,
       code,
     }),
   });
