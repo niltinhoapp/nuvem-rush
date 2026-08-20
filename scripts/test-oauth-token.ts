@@ -35,8 +35,10 @@ for (const invalidResponse of [
 const originalFetch = globalThis.fetch;
 const originalAppId = process.env.NUVEMSHOP_APP_ID;
 const originalSecret = process.env.NUVEMSHOP_CLIENT_SECRET;
+const originalAppBaseUrl = process.env.APP_BASE_URL;
 process.env.NUVEMSHOP_APP_ID = "34663";
 process.env.NUVEMSHOP_CLIENT_SECRET = "client-secret-not-for-logs";
+process.env.APP_BASE_URL = "https://preview.example.com/";
 
 async function exchangeThenPersist(response: unknown) {
   let writes = 0;
@@ -66,13 +68,24 @@ try {
   };
   await exchangeCodeForToken("authorization-code-not-for-logs");
   const headers = new Headers(requestInit?.headers);
-  assert.equal(headers.get("content-type"), "application/x-www-form-urlencoded");
-  assert.ok(requestInit?.body instanceof URLSearchParams);
-  const requestBody = requestInit.body as URLSearchParams;
-  assert.equal(requestBody.get("client_id"), "34663");
-  assert.equal(requestBody.get("client_secret"), "client-secret-not-for-logs");
-  assert.equal(requestBody.get("code"), "authorization-code-not-for-logs");
-  assert.equal(requestBody.has("grant_type"), false);
+  assert.equal(headers.get("content-type"), "application/json");
+  assert.equal(typeof requestInit?.body, "string");
+  const requestBody = JSON.parse(requestInit?.body as string) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(requestBody).sort(), [
+    "client_id",
+    "client_secret",
+    "code",
+    "grant_type",
+    "redirect_uri",
+  ]);
+  assert.equal(requestBody.client_id, "34663");
+  assert.equal(requestBody.client_secret, "client-secret-not-for-logs");
+  assert.equal(requestBody.code, "authorization-code-not-for-logs");
+  assert.equal(requestBody.grant_type, "authorization_code");
+  assert.equal(
+    requestBody.redirect_uri,
+    "https://preview.example.com/api/auth/nuvemshop/callback",
+  );
 
   const valid = await exchangeThenPersist(officialResponse);
   assert.equal(valid.writes, 1);
@@ -117,12 +130,22 @@ try {
     NuvemshopOAuthResponseError,
   );
   assert.equal(fetchCalled, false, "credencial ausente deve falhar antes da rede");
+
+  process.env.NUVEMSHOP_CLIENT_SECRET = "client-secret-not-for-logs";
+  delete process.env.APP_BASE_URL;
+  await assert.rejects(
+    exchangeCodeForToken("authorization-code-not-for-logs"),
+    NuvemshopOAuthResponseError,
+  );
+  assert.equal(fetchCalled, false, "callback ausente deve falhar antes da rede");
 } finally {
   globalThis.fetch = originalFetch;
   if (originalAppId === undefined) delete process.env.NUVEMSHOP_APP_ID;
   else process.env.NUVEMSHOP_APP_ID = originalAppId;
   if (originalSecret === undefined) delete process.env.NUVEMSHOP_CLIENT_SECRET;
   else process.env.NUVEMSHOP_CLIENT_SECRET = originalSecret;
+  if (originalAppBaseUrl === undefined) delete process.env.APP_BASE_URL;
+  else process.env.APP_BASE_URL = originalAppBaseUrl;
 }
 
 console.log("oauth token response validation: OK");

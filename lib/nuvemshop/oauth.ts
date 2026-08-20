@@ -54,17 +54,20 @@ export function authorizeUrl(): string {
 export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken> {
   const appId = process.env.NUVEMSHOP_APP_ID?.trim();
   const clientSecret = process.env.NUVEMSHOP_CLIENT_SECRET?.trim();
+  const appBaseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 
-  if (!appId || !clientSecret) {
+  if (!appId || !clientSecret || !appBaseUrl) {
     throw new NuvemshopOAuthResponseError();
   }
 
   const res = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
       client_id: appId,
       client_secret: clientSecret,
+      redirect_uri: `${appBaseUrl}/api/auth/nuvemshop/callback`,
+      grant_type: "authorization_code",
       code,
     }),
   });
