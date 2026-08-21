@@ -9,12 +9,14 @@ import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
 import { handleAppUninstalled } from "@/lib/lifecycle/uninstall";
 import { lgpdEventSchema } from "@/lib/lgpd/model";
 import { processCustomerRedact } from "@/lib/lgpd/customerRedact";
-import {
-  firestoreCustomerRedactRepository,
-  registerMinimalLgpdRequest,
-} from "@/lib/lgpd/firestore";
+import { firestoreCustomerRedactRepository } from "@/lib/lgpd/firestore";
 import { processStoreRedact } from "@/lib/lgpd/storeRedact";
 import { firestoreStoreRedactRepository } from "@/lib/lgpd/storeRedact.firestore";
+import {
+  DATA_REQUEST_DELIVERY_STATUS,
+  processDataRequest,
+} from "@/lib/lgpd/dataRequest";
+import { firestoreDataRequestRepository } from "@/lib/lgpd/dataRequest.firestore";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
@@ -74,10 +76,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "payload LGPD invalido" }, { status: 400 });
       }
       try {
-        const result = await registerMinimalLgpdRequest(parsed.data);
-        return NextResponse.json({ ok: true, queued: true, deduped: result.deduped });
+        const result = await processDataRequest(firestoreDataRequestRepository, parsed.data);
+        return NextResponse.json({
+          ok: true,
+          compiled: true,
+          deduped: result.deduped,
+          delivery: DATA_REQUEST_DELIVERY_STATUS,
+        });
       } catch {
-        return NextResponse.json({ error: "falha ao registrar LGPD" }, { status: 500 });
+        return NextResponse.json({ error: "falha ao processar LGPD" }, { status: 500 });
       }
     }
 
@@ -97,8 +104,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    /* app/uninstalled continua no fluxo validado acima; store/redact e
-       data_request ficam apenas registrados, sem purge/entrega nesta fase. */
+    /* app/uninstalled continua no fluxo validado acima. Data request compila
+       somente em memoria; entrega aguarda contrato oficial da Nuvemshop. */
 
     // ---- Pedidos -> motor de regras ----
     case "order/paid":

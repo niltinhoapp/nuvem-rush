@@ -1,63 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { FieldPath, FieldValue } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Contact, Job } from "@/types";
 import type { CustomerRedactRepository, RedactCounts } from "./customerRedact";
 import {
   customerKeys,
   minimalRequest,
-  normalizeEmail,
-  normalizePhone,
   type LgpdWebhook,
   type MinimalLgpdRequest,
 } from "./model";
+import { findCustomerContact } from "./customerLookup.firestore";
 
 const PROCESSING_LEASE_MS = 10 * 60_000;
 
 function requestRef(storeId: string, requestId: string) {
   return col(storeId, "lgpd_requests").doc(requestId);
-}
-
-async function allContacts(storeId: string) {
-  const docs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
-  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
-  while (true) {
-    let query = col(storeId, "contacts").orderBy(FieldPath.documentId()).limit(400);
-    if (cursor) query = query.startAfter(cursor);
-    const page = await query.get();
-    docs.push(...page.docs);
-    if (page.size < 400) return docs;
-    cursor = page.docs.at(-1);
-  }
-}
-
-async function findContact(storeId: string, payload: LgpdWebhook) {
-  const customer = payload.customer;
-  if (!customer || customerKeys(storeId, customer).length === 0) {
-    throw new Error("lgpd_customer_identifier_missing");
-  }
-
-  const contacts = await allContacts(storeId);
-  const byId = customer.id
-    ? contacts.filter((doc) => {
-        const data = doc.data() as Partial<Contact>;
-        return String(data.nsCustomerId ?? "") === customer.id || doc.id === customer.id;
-      })
-    : [];
-  const email = normalizeEmail(customer.email);
-  const phone = normalizePhone(customer.phone);
-  const matches = byId.length > 0
-    ? byId
-    : contacts.filter((doc) => {
-        const data = doc.data() as Partial<Contact>;
-        return Boolean(
-          (email && normalizeEmail(data.email ?? undefined) === email)
-          || (phone && normalizePhone(data.phone ?? undefined) === phone),
-        );
-      });
-  const unique = [...new Map(matches.map((doc) => [doc.id, doc])).values()];
-  if (unique.length > 1) throw new Error("lgpd_customer_ambiguous");
-  return unique[0];
 }
 
 async function redactRelatedData(
@@ -202,7 +159,7 @@ export const firestoreCustomerRedactRepository: CustomerRedactRepository = {
       }, { merge: true });
     }
 
-    const contactDoc = await findContact(payload.store_id, payload);
+    const contactDoc = await findCustomerContact(payload.store_id, payload);
     if (!contactDoc) {
       return {
         contacts: 0, orders: 0, carts: 0, enrollments: 0,
