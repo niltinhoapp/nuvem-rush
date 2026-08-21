@@ -28,7 +28,9 @@ export default function SuportePage() {
       <p><strong>Os disparos têm atraso?</strong> Você define o tempo de cada etapa
         (após X minutos, horas ou dias da compra).</p>
       <p><strong>Como cancelo?</strong> Basta desinstalar o aplicativo pelo painel da
-        sua loja; seus dados são removidos conforme nossa
+        sua loja. A desinstalação interrompe o processamento ativo; a remoção ou
+        anonimização de dados ocorre conforme os processos de proteção de dados e
+        LGPD da Nuvemshop e a nossa
         <a href="/privacidade"> Política de Privacidade</a>.</p>
     </main>
   );

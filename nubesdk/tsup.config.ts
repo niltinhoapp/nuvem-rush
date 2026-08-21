@@ -12,7 +12,7 @@ export default defineConfig({
   // Injeta o endpoint público em build-time (sem segredo).
   define: {
     CART_SIGNAL_ENDPOINT: JSON.stringify(
-      process.env.CART_SIGNAL_ENDPOINT ?? "https://nuvem-rush.vercel.app/api/storefront/cart-signal",
+      process.env.CART_SIGNAL_ENDPOINT?.trim() ?? "",
     ),
   },
   // Gera dist/main.min.js (em vez de dist/main.js).
