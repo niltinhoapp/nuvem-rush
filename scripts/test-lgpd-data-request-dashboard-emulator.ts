@@ -33,6 +33,7 @@ async function main() {
     GET,
     createDataRequestGetHandler,
   } = await import("../app/api/dashboard/data-requests/[requestId]/route");
+  const { GET: LIST_GET } = await import("../app/api/dashboard/data-requests/route");
 
   let passed = 0;
   const check = (label: string, condition: boolean) => {
@@ -166,6 +167,20 @@ async function main() {
     };
   }
 
+  async function callList(
+    storeId: string | null,
+    extraHeaders: Record<string, string> = {},
+  ) {
+    const headers = new Headers(extraHeaders);
+    if (storeId) headers.set("authorization", `Bearer ${sessionToken(storeId)}`);
+    const request = new NextRequest(
+      "https://app.test/api/dashboard/data-requests?storeId=store-b",
+      { headers },
+    );
+    const response = await LIST_GET(request);
+    return { response, text: await response.text() };
+  }
+
   await Promise.all([
     seed("store-a", "A"),
     seed("store-b", "B"),
@@ -178,6 +193,33 @@ async function main() {
 
   const requestA = await createRequest("store-a", "request-a", 1_000);
   const requestB = await createRequest("store-b", "request-b", 1_100);
+  await db.doc("stores/store-a/lgpd_requests/not-a-data-request").set({
+    type: "customers/redact",
+    receivedAt: 9_999,
+    email: subject.email,
+  });
+
+  const listWithoutSession = await callList(null, { "x-store-id": "store-a" });
+  check("listagem sem sessao rejeita x-store-id e query storeId",
+    listWithoutSession.response.status === 401);
+
+  const listA = await callList("store-a");
+  const listABody = JSON.parse(listA.text) as Record<string, any>;
+  const listedRequests = Array.isArray(listABody.requests) ? listABody.requests : [];
+  check("listagem usa store da sessao e retorna somente data requests da store A",
+    listA.response.status === 200
+      && listedRequests.length === 1
+      && listedRequests[0]?.requestId === requestA
+      && !listA.text.includes(requestB));
+  check("metadata da listagem exclui PII, hashes e campos internos",
+    Object.keys(listedRequests[0] ?? {}).sort().join(",")
+      === "compileStatus,deliveryStatus,receivedAt,requestId"
+      && !listA.text.includes(subject.email)
+      && !listA.text.includes("customerKeyHashes")
+      && !listA.text.includes("leaseId")
+      && !listA.text.includes("errorCode"));
+  check("listagem e no-store", listA.response.headers.get("cache-control")
+    === "private, no-store, max-age=0");
 
   const first = await call(GET, "store-a", requestA);
   const firstBody = JSON.parse(first.text) as Record<string, any>;

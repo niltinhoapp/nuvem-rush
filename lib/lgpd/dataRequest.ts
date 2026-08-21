@@ -26,6 +26,14 @@ export type DataRequestEvidence = {
   accessCount?: number;
 };
 
+export type DataRequestDashboardItem = {
+  requestId: string;
+  receivedAt: number;
+  compileStatus: "pending" | "processing" | "completed" | "failed";
+  deliveryStatus: "pending" | "delivered";
+  deliveredAt?: number;
+};
+
 export type DataRequestContact = Pick<
   Contact,
   | "contactId"

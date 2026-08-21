@@ -160,6 +160,8 @@ export default function DashboardPage() {
       {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
 
       {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
+
+      {connection === "ready" && <DataRequestsCard />}
     </Box>
   );
 
@@ -392,6 +394,29 @@ function FlowRow({ flow }: { flow: Flow }) {
           <Button as="a" href={`/dashboard/flows/${flow.flowId}`}>
             <Icon source={<EditIcon size={16} />} color="currentColor" />
             Editar
+          </Button>
+        </Box>
+      </Card.Body>
+    </Card>
+  );
+}
+
+
+function DataRequestsCard() {
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" flexDirection="column" gap="1">
+            <Title as="h2" fontSize="3">
+              Privacidade - Solicitações de dados
+            </Title>
+            <Text color="neutral-textLow">
+              Consulte os relatórios de dados solicitados por clientes pelos canais oficiais da Nuvemshop.
+            </Text>
+          </Box>
+          <Button as="a" href="/dashboard/data-requests">
+            Ver solicitações
           </Button>
         </Box>
       </Card.Body>

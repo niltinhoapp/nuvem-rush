@@ -15,6 +15,7 @@ import {
   type DataRequestEnrollment,
   type DataRequestEvidence,
   type DataRequestExport,
+  type DataRequestDashboardItem,
   type DataRequestOrder,
   type DataRequestRepository,
   type MessagingSummary,
@@ -53,8 +54,16 @@ export interface DataRequestDeliveryRepository {
   ): Promise<DataRequestDeliveryReceipt>;
 }
 
+export interface DataRequestDashboardListRepository {
+  listForDashboard(
+    storeId: string,
+    limit: number,
+  ): Promise<DataRequestDashboardItem[]>;
+}
+
 export type FirestoreDataRequestRepository = DataRequestRepository
-  & DataRequestDeliveryRepository;
+  & DataRequestDeliveryRepository
+  & DataRequestDashboardListRepository;
 
 function requestRef(storeId: string, requestId: string) {
   return col(storeId, "lgpd_requests").doc(requestId);
@@ -217,6 +226,44 @@ export function createFirestoreDataRequestRepository(
   hooks: DataRequestHooks = {},
 ): FirestoreDataRequestRepository {
   return {
+    async listForDashboard(storeId, limit) {
+      const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 50));
+      // `type == ...` usa apenas o indice simples automatico. A ordenacao e
+      // feita depois da projecao para nao introduzir um indice composto novo.
+      const snapshot = await col(storeId, "lgpd_requests")
+        .where("type", "==", "customers/data_request")
+        .limit(safeLimit)
+        .get();
+      return snapshot.docs
+        .map((document): DataRequestDashboardItem => {
+          const value = document.data() as Partial<DataRequestEvidence>;
+          const compileStatus = value.compileStatus === "pending"
+              || value.compileStatus === "processing"
+              || value.compileStatus === "completed"
+              || value.compileStatus === "failed"
+            ? value.compileStatus
+            : value.status === "pending"
+                || value.status === "processing"
+                || value.status === "completed"
+                || value.status === "failed"
+              ? value.status
+              : "pending";
+          const deliveryStatus = value.deliveryStatus === "delivered"
+            ? "delivered"
+            : "pending";
+          return {
+            requestId: document.id,
+            receivedAt: Number(value.receivedAt ?? 0),
+            compileStatus,
+            deliveryStatus,
+            ...(typeof value.deliveredAt === "number"
+              ? { deliveredAt: value.deliveredAt }
+              : {}),
+          };
+        })
+        .sort((left, right) => right.receivedAt - left.receivedAt);
+    },
+
     async begin(payload, now) {
       const requestId = lgpdRequestId(payload);
       const minimal = minimalRequest(payload, now);
