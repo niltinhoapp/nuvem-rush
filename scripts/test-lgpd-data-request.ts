@@ -67,11 +67,23 @@ async function main() {
   const routeSource = readFileSync("app/api/webhooks/nuvemshop/route.ts", "utf8");
   const serviceSource = readFileSync("lib/lgpd/dataRequest.ts", "utf8");
   const repositorySource = readFileSync("lib/lgpd/dataRequest.firestore.ts", "utf8");
+  const deliverySource = readFileSync("lib/lgpd/dataRequestDelivery.ts", "utf8");
+  const dashboardRouteSource = readFileSync(
+    "app/api/dashboard/data-requests/[requestId]/route.ts",
+    "utf8",
+  );
   assert.match(routeSource, /processDataRequest\(firestoreDataRequestRepository/);
   assert.doesNotMatch(routeSource, /registerMinimalLgpdRequest/);
-  assert.equal(DATA_REQUEST_DELIVERY_STATUS, "DELIVERY_BLOCKED_BY_OFFICIAL_CONTRACT");
+  assert.equal(
+    DATA_REQUEST_DELIVERY_STATUS,
+    "DELIVERY_PENDING_AUTHENTICATED_DASHBOARD_ACCESS",
+  );
   assert.doesNotMatch(serviceSource + repositorySource, /sendEmail|sendWhatsapp|upload|signedUrl|storageBucket/i);
   assert.doesNotMatch(repositorySource, /accessToken|cloudTaskName|lastError|collection\("logs"\)/);
+  assert.match(dashboardRouteSource, /resolveAuthenticatedStoreId/);
+  assert.doesNotMatch(dashboardRouteSource, /searchParams|get\("storeId"\)|x-store-id/);
+  assert.match(deliverySource, /markDelivered/);
+  assert.doesNotMatch(deliverySource + dashboardRouteSource, /sendEmail|sendWhatsapp|signedUrl|storageBucket/i);
 
   console.log("lgpd data request compilation: OK");
 }

@@ -1,7 +1,7 @@
 import type { Cart, Contact, Enrollment, Order, OrderItem } from "@/types";
 import type { LgpdWebhook } from "./model";
 
-export const DATA_REQUEST_DELIVERY_STATUS = "DELIVERY_BLOCKED_BY_OFFICIAL_CONTRACT" as const;
+export const DATA_REQUEST_DELIVERY_STATUS = "DELIVERY_PENDING_AUTHENTICATED_DASHBOARD_ACCESS" as const;
 
 export type DataRequestEvidence = {
   requestId: string;
@@ -16,6 +16,14 @@ export type DataRequestEvidence = {
   completedAt?: number;
   errorCode?: string;
   affected?: Record<string, number>;
+  customerKeyHashes?: string[];
+  dataRequestId?: string;
+  compileStatus?: "pending" | "processing" | "completed" | "failed";
+  deliveryStatus?: "pending" | "delivered";
+  deliveryMethod?: "dashboard";
+  delivered?: boolean;
+  deliveredAt?: number;
+  accessCount?: number;
 };
 
 export type DataRequestContact = Pick<
@@ -126,8 +134,8 @@ export async function processDataRequest(
   if (claim.action === "duplicate") return { ok: true, deduped: true, export: null };
 
   try {
-    // O export existe somente em memoria. A entrega continua bloqueada ate a
-    // Nuvemshop documentar o contrato oficial de transporte/resposta.
+    // O export existe somente em memoria. O dashboard autenticado recompila
+    // sob demanda; este processamento do webhook nao entrega nem persiste PII.
     const compiled = await repository.compile(payload, claim.evidence, now);
     await repository.complete(payload, claim.evidence, compiled, now);
     return { ok: true, deduped: false, export: compiled };

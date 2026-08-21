@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     }
 
     /* app/uninstalled continua no fluxo validado acima. Data request compila
-       somente em memoria; entrega aguarda contrato oficial da Nuvemshop. */
+       somente em memoria; delivery ocorre sob demanda no dashboard Nexo. */
 
     // ---- Pedidos -> motor de regras ----
     case "order/paid":

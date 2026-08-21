@@ -57,6 +57,22 @@ export function customerKeys(
   return [...new Set(customerIdentityKeys(customer).map((key) => digest(`${storeId}:${key}`)))];
 }
 
+// Chaves opacas usadas para recompilar data requests sem persistir os
+// identificadores originais do titular. `identification` e incluido apenas
+// neste lookup; o lifecycle de suppression existente permanece inalterado.
+export function dataRequestCustomerKeys(
+  storeId: string,
+  customer: LgpdWebhook["customer"],
+): string[] {
+  const identification = customer?.identification == null
+    ? undefined
+    : String(customer.identification).trim();
+  return [...new Set([
+    ...customerKeys(storeId, customer),
+    identification ? digest(`${storeId}:identification:${identification}`) : undefined,
+  ].filter((value): value is string => Boolean(value)))];
+}
+
 export function lgpdRequestId(payload: LgpdWebhook): string {
   const subject = payload.event === "store/redact"
     ? "store"
@@ -101,7 +117,11 @@ export function minimalRequest(
     type: payload.event,
     storeId: payload.store_id,
     status: "pending",
-    ...(payload.customer ? { customerKeyHashes: customerKeys(payload.store_id, payload.customer) } : {}),
+    ...(payload.customer ? {
+      customerKeyHashes: payload.event === "customers/data_request"
+        ? dataRequestCustomerKeys(payload.store_id, payload.customer)
+        : customerKeys(payload.store_id, payload.customer),
+    } : {}),
     ...(payload.data_request?.id ? { dataRequestId: payload.data_request.id } : {}),
     ...(payload.event === "customers/redact" ? { anonymizedContactId: anonymousContactId(requestId) } : {}),
     attempts: 0,

@@ -4,12 +4,18 @@
 import type { NextRequest } from "next/server";
 import { verifySessionToken } from "./sessionToken";
 
+// Resolve exclusivamente uma sessao Nexo autenticada. Nao possui fallback de
+// desenvolvimento e deve ser usado por endpoints que podem retornar PII.
+export function resolveAuthenticatedStoreId(req: NextRequest): string | null {
+  const auth = req.headers.get("authorization");
+  if (!auth?.startsWith("Bearer ")) return null;
+  return verifySessionToken(auth.slice(7))?.storeId ?? null;
+}
+
 export function resolveStoreId(req: NextRequest): string | null {
   const auth = req.headers.get("authorization");
   if (auth?.startsWith("Bearer ")) {
-    const claims = verifySessionToken(auth.slice(7));
-    if (claims) return claims.storeId;
-    return null; // token presente porem invalido: nao cai no atalho de dev
+    return resolveAuthenticatedStoreId(req);
   }
 
   // Atalho de desenvolvimento (nunca confiar em producao).

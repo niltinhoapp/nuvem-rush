@@ -3,6 +3,7 @@ import { col } from "@/lib/firebase/admin";
 import type { Contact } from "@/types";
 import {
   customerKeys,
+  dataRequestCustomerKeys,
   normalizeEmail,
   normalizePhone,
   type LgpdWebhook,
@@ -46,6 +47,33 @@ export async function findCustomerContact(
       || (phone && normalizePhone(data.phone ?? undefined) === phone)
       || (identification && String(data.identification ?? "").trim() === identification),
     );
+  });
+  const unique = [...new Map(matches.map((doc) => [doc.id, doc])).values()];
+  if (unique.length > 1) throw new Error("lgpd_customer_ambiguous");
+  return unique[0];
+}
+
+export async function findCustomerContactByKeyHashes(
+  storeId: string,
+  keyHashes: string[],
+): Promise<FirebaseFirestore.QueryDocumentSnapshot | undefined> {
+  if (keyHashes.length === 0) throw new Error("lgpd_data_request_not_deliverable");
+  const expected = new Set(keyHashes);
+  const contacts = await allContacts(storeId);
+  const matches = contacts.filter((doc) => {
+    const data = doc.data() as Partial<Contact> & { identification?: unknown };
+    const shared = {
+      email: data.email ?? undefined,
+      phone: data.phone ?? undefined,
+      identification: data.identification as string | number | undefined,
+    };
+    const candidateHashes = [data.nsCustomerId, doc.id].flatMap((id) =>
+      dataRequestCustomerKeys(storeId, {
+        ...shared,
+        ...(id == null ? {} : { id: String(id) }),
+      }),
+    );
+    return candidateHashes.some((hash) => expected.has(hash));
   });
   const unique = [...new Map(matches.map((doc) => [doc.id, doc])).values()];
   if (unique.length > 1) throw new Error("lgpd_customer_ambiguous");

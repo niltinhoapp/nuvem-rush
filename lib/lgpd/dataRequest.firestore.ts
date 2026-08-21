@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Cart, Contact, Enrollment, Job, Order } from "@/types";
-import { findCustomerContact } from "./customerLookup.firestore";
-import { lgpdRequestId } from "./model";
+import {
+  findCustomerContact,
+  findCustomerContactByKeyHashes,
+} from "./customerLookup.firestore";
+import { lgpdRequestId, minimalRequest } from "./model";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
   sanitizeOrderItems,
   type DataRequestCart,
@@ -21,6 +25,36 @@ const PROCESSING_LEASE_MS = 10 * 60_000;
 type DataRequestHooks = {
   afterCompile?: (compiled: DataRequestExport) => Promise<void>;
 };
+
+export type DataRequestDeliverySnapshot = {
+  storeStatus: unknown;
+  evidence: DataRequestEvidence;
+};
+
+export type DataRequestDeliveryReceipt = {
+  deliveredAt: number;
+  accessCount: number;
+};
+
+export interface DataRequestDeliveryRepository {
+  loadForDelivery(
+    storeId: string,
+    requestId: string,
+  ): Promise<DataRequestDeliverySnapshot | null>;
+  compileForDelivery(
+    storeId: string,
+    evidence: DataRequestEvidence,
+    now: number,
+  ): Promise<DataRequestExport>;
+  markDelivered(
+    storeId: string,
+    requestId: string,
+    now: number,
+  ): Promise<DataRequestDeliveryReceipt>;
+}
+
+export type FirestoreDataRequestRepository = DataRequestRepository
+  & DataRequestDeliveryRepository;
 
 function requestRef(storeId: string, requestId: string) {
   return col(storeId, "lgpd_requests").doc(requestId);
@@ -135,12 +169,57 @@ function affectedCounts(compiled: DataRequestExport): Record<string, number> {
   };
 }
 
+async function compileExport(
+  storeId: string,
+  requestId: string,
+  contactDoc: FirebaseFirestore.QueryDocumentSnapshot | undefined,
+  now: number,
+  hooks: DataRequestHooks,
+): Promise<DataRequestExport> {
+  if (!contactDoc) {
+    const empty: DataRequestExport = {
+      requestId,
+      storeId,
+      generatedAt: now,
+      contact: null,
+      orders: [],
+      carts: [],
+      enrollments: [],
+      messagingSummary: [],
+    };
+    await hooks.afterCompile?.(empty);
+    return empty;
+  }
+
+  const contactId = String(
+    (contactDoc.data() as Partial<Contact>).contactId ?? contactDoc.id,
+  );
+  const [orders, carts, enrollments] = await Promise.all([
+    relatedDocs(storeId, "orders", contactId),
+    relatedDocs(storeId, "carts", contactId),
+    relatedDocs(storeId, "enrollments", contactId),
+  ]);
+  const compiled: DataRequestExport = {
+    requestId,
+    storeId,
+    generatedAt: now,
+    contact: contactExport(contactDoc),
+    orders: orders.docs.map(orderExport),
+    carts: carts.docs.map(cartExport),
+    enrollments: enrollments.docs.map(enrollmentExport),
+    messagingSummary: await messagingSummary(storeId, enrollments.docs),
+  };
+  await hooks.afterCompile?.(compiled);
+  return compiled;
+}
+
 export function createFirestoreDataRequestRepository(
   hooks: DataRequestHooks = {},
-): DataRequestRepository {
+): FirestoreDataRequestRepository {
   return {
     async begin(payload, now) {
       const requestId = lgpdRequestId(payload);
+      const minimal = minimalRequest(payload, now);
       const ref = requestRef(payload.store_id, requestId);
       return db.runTransaction(async (tx) => {
         const [store, current] = await Promise.all([
@@ -163,6 +242,9 @@ export function createFirestoreDataRequestRepository(
           const evidence: DataRequestEvidence = {
             ...data,
             status: "processing",
+            compileStatus: "processing",
+            customerKeyHashes: minimal.customerKeyHashes ?? [],
+            ...(minimal.dataRequestId ? { dataRequestId: minimal.dataRequestId } : {}),
             attempts: (data.attempts ?? 0) + 1,
             processingAt: now,
             leaseId: randomUUID(),
@@ -170,6 +252,9 @@ export function createFirestoreDataRequestRepository(
           };
           tx.set(ref, {
             status: evidence.status,
+            compileStatus: evidence.compileStatus,
+            customerKeyHashes: evidence.customerKeyHashes,
+            ...(evidence.dataRequestId ? { dataRequestId: evidence.dataRequestId } : {}),
             attempts: evidence.attempts,
             processingAt: evidence.processingAt,
             leaseId: evidence.leaseId,
@@ -183,6 +268,12 @@ export function createFirestoreDataRequestRepository(
           requestId,
           type: "customers/data_request",
           status: "processing",
+          compileStatus: "processing",
+          deliveryStatus: "pending",
+          delivered: false,
+          accessCount: 0,
+          customerKeyHashes: minimal.customerKeyHashes ?? [],
+          ...(minimal.dataRequestId ? { dataRequestId: minimal.dataRequestId } : {}),
           attempts: 1,
           receivedAt: now,
           updatedAt: now,
@@ -196,41 +287,7 @@ export function createFirestoreDataRequestRepository(
 
     async compile(payload, evidence, now) {
       const contactDoc = await findCustomerContact(payload.store_id, payload);
-      if (!contactDoc) {
-        const empty: DataRequestExport = {
-          requestId: evidence.requestId,
-          storeId: payload.store_id,
-          generatedAt: now,
-          contact: null,
-          orders: [],
-          carts: [],
-          enrollments: [],
-          messagingSummary: [],
-        };
-        await hooks.afterCompile?.(empty);
-        return empty;
-      }
-
-      const contactId = String(
-        (contactDoc.data() as Partial<Contact>).contactId ?? contactDoc.id,
-      );
-      const [orders, carts, enrollments] = await Promise.all([
-        relatedDocs(payload.store_id, "orders", contactId),
-        relatedDocs(payload.store_id, "carts", contactId),
-        relatedDocs(payload.store_id, "enrollments", contactId),
-      ]);
-      const compiled: DataRequestExport = {
-        requestId: evidence.requestId,
-        storeId: payload.store_id,
-        generatedAt: now,
-        contact: contactExport(contactDoc),
-        orders: orders.docs.map(orderExport),
-        carts: carts.docs.map(cartExport),
-        enrollments: enrollments.docs.map(enrollmentExport),
-        messagingSummary: await messagingSummary(payload.store_id, enrollments.docs),
-      };
-      await hooks.afterCompile?.(compiled);
-      return compiled;
+      return compileExport(payload.store_id, evidence.requestId, contactDoc, now, hooks);
     },
 
     async complete(payload, evidence, compiled, now) {
@@ -246,6 +303,10 @@ export function createFirestoreDataRequestRepository(
         }
         tx.update(ref, {
           status: "completed",
+          compileStatus: "completed",
+          deliveryStatus: "pending",
+          delivered: false,
+          accessCount: 0,
           generatedAt: compiled.generatedAt,
           completedAt: now,
           updatedAt: now,
@@ -268,11 +329,73 @@ export function createFirestoreDataRequestRepository(
         ) return;
         tx.update(ref, {
           status: "failed",
+          compileStatus: "failed",
           errorCode,
           updatedAt: now,
           processingAt: FieldValue.delete(),
           leaseId: FieldValue.delete(),
         });
+      });
+    },
+
+    async loadForDelivery(storeId, requestId) {
+      const [store, request] = await Promise.all([
+        storeRef(storeId).get(),
+        requestRef(storeId, requestId).get(),
+      ]);
+      if (!store.exists || !request.exists) return null;
+      return {
+        storeStatus: store.data()?.status,
+        evidence: request.data() as DataRequestEvidence,
+      };
+    },
+
+    async compileForDelivery(storeId, evidence, now) {
+      if (
+        evidence.type !== "customers/data_request"
+        || evidence.status !== "completed"
+        || !Array.isArray(evidence.customerKeyHashes)
+      ) {
+        throw new Error("lgpd_data_request_not_deliverable");
+      }
+      const contactDoc = await findCustomerContactByKeyHashes(
+        storeId,
+        evidence.customerKeyHashes,
+      );
+      return compileExport(storeId, evidence.requestId, contactDoc, now, hooks);
+    },
+
+    async markDelivered(storeId, requestId, now) {
+      return db.runTransaction(async (tx) => {
+        const [store, request] = await Promise.all([
+          tx.get(storeRef(storeId)),
+          tx.get(requestRef(storeId, requestId)),
+        ]);
+        if (!store.exists || !isStoreCommerciallyActive(store.data()?.status)) {
+          throw new Error("lgpd_data_request_store_unavailable");
+        }
+        if (
+          !request.exists
+          || request.data()?.type !== "customers/data_request"
+          || request.data()?.status !== "completed"
+        ) {
+          throw new Error("lgpd_data_request_not_deliverable");
+        }
+        const current = request.data() as DataRequestEvidence;
+        const deliveredAt = typeof current.deliveredAt === "number"
+          ? current.deliveredAt
+          : now;
+        const accessCount = Number(current.accessCount ?? 0) + 1;
+        tx.update(request.ref, {
+          compileStatus: "completed",
+          deliveryStatus: "delivered",
+          deliveryMethod: "dashboard",
+          delivered: true,
+          deliveredAt,
+          accessCount,
+          updatedAt: now,
+        });
+        return { deliveredAt, accessCount };
       });
     },
   };

@@ -339,8 +339,8 @@ async function main() {
     && retry.export.enrollments.length === 1
     && (await db.doc(`stores/store-retry/lgpd_requests/${retryId}`).get()).data()?.attempts === 2);
 
-  check("delivery permanece bloqueada por contrato oficial",
-    DATA_REQUEST_DELIVERY_STATUS === "DELIVERY_BLOCKED_BY_OFFICIAL_CONTRACT");
+  check("delivery aguarda acesso autenticado pelo dashboard",
+    DATA_REQUEST_DELIVERY_STATUS === "DELIVERY_PENDING_AUTHENTICATED_DASHBOARD_ACCESS");
   console.log(`\n${passed} testes customers/data_request no Firestore Emulator passaram`);
 }
 

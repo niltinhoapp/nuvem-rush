@@ -13,7 +13,8 @@
     "test:lgpd": "tsx scripts/test-lgpd-customer-redact.ts",
     "test:lgpd:firestore": "tsx scripts/test-lgpd-firestore-emulator.ts",
     "test:lgpd:store-redact": "tsx scripts/test-lgpd-store-redact.ts",
-    "test:lgpd:data-request": "tsx scripts/test-lgpd-data-request-emulator.ts"
+    "test:lgpd:data-request": "tsx scripts/test-lgpd-data-request-emulator.ts",
+    "test:lgpd:data-request-dashboard": "tsx scripts/test-lgpd-data-request-dashboard-emulator.ts"
   },
   "dependencies": {
     "@google-cloud/tasks": "^6.2.3",
