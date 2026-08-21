@@ -4,6 +4,11 @@ import {
   firestoreDataRequestRepository,
   type DataRequestDashboardListRepository,
 } from "@/lib/lgpd/dataRequest.firestore";
+import {
+  decodeDataRequestCursor,
+  encodeDataRequestCursor,
+  InvalidDataRequestCursorError,
+} from "@/lib/lgpd/dataRequestPagination";
 
 const DASHBOARD_REQUEST_LIMIT = 50;
 const NO_STORE_HEADERS = {
@@ -30,12 +35,31 @@ export function createDataRequestListGetHandler(
     }
 
     try {
-      const requests = await repository.listForDashboard(
+      const encodedCursor = req.nextUrl.searchParams.get("cursor");
+      const cursor = encodedCursor ? decodeDataRequestCursor(encodedCursor) : undefined;
+      const page = await repository.listForDashboard(
         storeId,
         DASHBOARD_REQUEST_LIMIT,
+        cursor,
       );
-      return NextResponse.json({ requests }, { headers: NO_STORE_HEADERS });
-    } catch {
+      const lastItem = page.items.at(-1);
+      const nextCursor = page.hasMore && lastItem
+        ? encodeDataRequestCursor({
+            receivedAt: lastItem.receivedAt,
+            requestId: lastItem.requestId,
+          })
+        : null;
+      return NextResponse.json(
+        { items: page.items, nextCursor },
+        { headers: NO_STORE_HEADERS },
+      );
+    } catch (error) {
+      if (error instanceof InvalidDataRequestCursorError) {
+        return NextResponse.json(
+          { error: "cursor invalido" },
+          { status: 400, headers: NO_STORE_HEADERS },
+        );
+      }
       return NextResponse.json(
         { error: "falha ao listar solicitacoes" },
         { status: 500, headers: NO_STORE_HEADERS },

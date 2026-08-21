@@ -5,11 +5,14 @@ import { Box, Button, Card, Icon, Spinner, Tag, Text, Title } from "@nimbus-ds/c
 import { ExclamationTriangleIcon } from "@nimbus-ds/icons";
 import { ErrorBoundary } from "@tiendanube/nexo";
 import { getNexo, initNexo, sessionToken } from "@/lib/nexo";
-import type { DataRequestDashboardItem } from "@/lib/lgpd/dataRequest";
+import type {
+  DataRequestDashboardItem,
+  DataRequestDashboardPage,
+} from "@/lib/lgpd/dataRequest";
 
 type PageState =
   | { status: "loading" }
-  | { status: "ready"; requests: DataRequestDashboardItem[] }
+  | { status: "ready"; requests: DataRequestDashboardItem[]; nextCursor: string | null }
   | { status: "auth-error" }
   | { status: "error" };
 
@@ -47,23 +50,50 @@ async function fetchRequests(): Promise<{
   state: PageState;
 }> {
   const nexo = await initNexo();
+  try {
+    const page = await fetchRequestPage();
+    return { nexo, state: { status: "ready", requests: page.items, nextCursor: page.nextCursor } };
+  } catch (error) {
+    if (error instanceof Error && error.message === "data_request_auth_failed") {
+      return { nexo, state: { status: "auth-error" } };
+    }
+    throw error;
+  }
+}
+
+async function fetchRequestPage(cursor?: string): Promise<DataRequestDashboardPage> {
   const token = await sessionToken();
-  const response = await fetch("/api/dashboard/data-requests", {
+  const url = cursor
+    ? `/api/dashboard/data-requests?cursor=${encodeURIComponent(cursor)}`
+    : "/api/dashboard/data-requests";
+  const response = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
-  if (response.status === 401) return { nexo, state: { status: "auth-error" } };
+  if (response.status === 401) throw new Error("data_request_auth_failed");
   if (!response.ok) throw new Error("data_request_list_failed");
-  const body = await response.json() as { requests?: unknown };
-  const requests = Array.isArray(body.requests)
-    ? body.requests.filter(isDashboardItem)
-    : [];
-  return { nexo, state: { status: "ready", requests } };
+  const body = await response.json() as { items?: unknown; nextCursor?: unknown };
+  const items = Array.isArray(body.items) ? body.items.filter(isDashboardItem) : [];
+  const nextCursor = typeof body.nextCursor === "string" ? body.nextCursor : null;
+  return { items, nextCursor };
+}
+
+export function appendUniqueRequests(
+  current: DataRequestDashboardItem[],
+  incoming: DataRequestDashboardItem[],
+) {
+  const seen = new Set(current.map((item) => item.requestId));
+  return [...current, ...incoming.filter((item) => {
+    if (seen.has(item.requestId)) return false;
+    seen.add(item.requestId);
+    return true;
+  })];
 }
 
 export default function DataRequestsPage() {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
+  const [moreStatus, setMoreStatus] = useState<"idle" | "loading" | "error">("idle");
 
   useEffect(() => {
     let current = true;
@@ -89,6 +119,24 @@ export default function DataRequestsPage() {
       .catch(() => setState({ status: "error" }));
   };
 
+  const loadMore = () => {
+    if (state.status !== "ready" || !state.nextCursor || moreStatus === "loading") return;
+    const cursor = state.nextCursor;
+    setMoreStatus("loading");
+    void fetchRequestPage(cursor)
+      .then((page) => {
+        setState((current) => current.status === "ready"
+          ? {
+              status: "ready",
+              requests: appendUniqueRequests(current.requests, page.items),
+              nextCursor: page.nextCursor,
+            }
+          : current);
+        setMoreStatus("idle");
+      })
+      .catch(() => setMoreStatus("error"));
+  };
+
   const content = (
     <Box padding="6" display="flex" flexDirection="column" gap="6">
       <Box display="flex" flexDirection="column" gap="1">
@@ -98,10 +146,32 @@ export default function DataRequestsPage() {
         </Text>
       </Box>
       <DataRequestListState state={state} onRetry={retry} />
+      {state.status === "ready" && state.requests.length > 0 && state.nextCursor ? (
+        <LoadMoreState status={moreStatus} onLoadMore={loadMore} />
+      ) : null}
     </Box>
   );
 
   return nexo ? <ErrorBoundary nexo={nexo}>{content}</ErrorBoundary> : content;
+}
+
+export function LoadMoreState({
+  status,
+  onLoadMore,
+}: {
+  status: "idle" | "loading" | "error";
+  onLoadMore: () => void;
+}) {
+  return (
+    <Box display="flex" flexDirection="column" alignItems="center" gap="2">
+      {status === "error" ? (
+        <Text color="danger-textLow">Não foi possível carregar mais solicitações. Tente novamente.</Text>
+      ) : null}
+      <Button onClick={onLoadMore} disabled={status === "loading"}>
+        {status === "loading" ? "Carregando..." : "Carregar mais"}
+      </Button>
+    </Box>
+  );
 }
 
 export function DataRequestListState({

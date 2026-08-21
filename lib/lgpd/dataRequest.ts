@@ -34,6 +34,16 @@ export type DataRequestDashboardItem = {
   deliveredAt?: number;
 };
 
+export type DataRequestDashboardCursor = {
+  receivedAt: number;
+  requestId: string;
+};
+
+export type DataRequestDashboardPage = {
+  items: DataRequestDashboardItem[];
+  nextCursor: string | null;
+};
+
 export type DataRequestContact = Pick<
   Contact,
   | "contactId"

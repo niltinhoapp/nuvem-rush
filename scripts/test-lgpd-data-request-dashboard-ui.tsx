@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DataRequestListState } from "../app/dashboard/data-requests/page";
+import {
+  appendUniqueRequests,
+  DataRequestListState,
+  LoadMoreState,
+} from "../app/dashboard/data-requests/page";
 import {
   DataRequestDetailState,
   DataRequestReport,
@@ -58,7 +62,7 @@ const exported: DataRequestExport = {
 };
 
 const emptyList = renderToStaticMarkup(
-  <DataRequestListState state={{ status: "ready", requests: [] }} onRetry={noop} />,
+  <DataRequestListState state={{ status: "ready", requests: [], nextCursor: null }} onRetry={noop} />,
 );
 check("D lista vazia renderiza empty state", emptyList.includes("Nenhuma solicitação de dados recebida ainda."));
 
@@ -97,6 +101,21 @@ const unavailable = renderToStaticMarkup(
 check("H detalhe 401 renderiza erro de autenticacao", authError.includes("validar sua sessão"));
 check("H detalhe 404 renderiza estado correto", notFound.includes("Solicitação não encontrada."));
 check("H detalhe 409 renderiza estado correto", unavailable.includes("temporariamente indisponível"));
+
+const loadMore = renderToStaticMarkup(<LoadMoreState status="idle" onLoadMore={noop} />);
+const loadMoreError = renderToStaticMarkup(<LoadMoreState status="error" onLoadMore={noop} />);
+check("UI oferece Carregar mais sem infinite scroll", loadMore.includes("Carregar mais"));
+check("UI mantem erro de paginacao inline com retry", loadMoreError.includes("Tente novamente")
+  && loadMoreError.includes("Carregar mais"));
+const deduped = appendUniqueRequests(
+  [{ requestId: "1", receivedAt: 3, compileStatus: "completed", deliveryStatus: "pending" }],
+  [
+    { requestId: "1", receivedAt: 3, compileStatus: "completed", deliveryStatus: "pending" },
+    { requestId: "2", receivedAt: 2, compileStatus: "completed", deliveryStatus: "pending" },
+  ],
+);
+check("append defensivo preserva ordem e remove duplicata por requestId",
+  deduped.map((item) => item.requestId).join(",") === "1,2");
 
 async function testDownload() {
   let downloaded = "";
@@ -147,6 +166,8 @@ async function main() {
   const detailPage = readFileSync(resolve("app/dashboard/data-requests/[requestId]/page.tsx"), "utf8");
   const listRoute = readFileSync(resolve("app/api/dashboard/data-requests/route.ts"), "utf8");
   const download = readFileSync(resolve("lib/lgpd/dataRequestDownload.client.ts"), "utf8");
+  const firebaseConfig = JSON.parse(readFileSync(resolve("firebase.json"), "utf8")) as Record<string, any>;
+  const indexesConfig = JSON.parse(readFileSync(resolve("firestore.indexes.json"), "utf8")) as Record<string, any>;
   const clientSources = `${listPage}\n${detailPage}\n${download}`;
   check("E dashboard principal contem card de Privacidade", dashboard.includes("Privacidade - Solicitações de dados")
     && dashboard.includes("/dashboard/data-requests"));
@@ -157,10 +178,22 @@ async function main() {
   check("A endpoint de lista usa somente sessao autenticada", listRoute.includes("resolveAuthenticatedStoreId(req)")
     && !listRoute.includes("resolveStoreId(req)")
     && !listRoute.includes("x-store-id")
-    && !listRoute.includes("searchParams"));
+    && !listRoute.includes('searchParams.get("storeId")')
+    && listRoute.includes('searchParams.get("cursor")'));
   check("J nenhum localStorage/sessionStorage", !/localStorage|sessionStorage/.test(clientSources));
   check("K nenhum console na UI de dados", !/console\./.test(clientSources));
   check("L nenhuma URL publica, signed URL ou Storage", !/signedUrl|firebase\/storage|@vercel\/blob|storageBucket/.test(clientSources));
+  check("indice composto possui sintaxe e campos esperados",
+    firebaseConfig.firestore?.indexes === "firestore.indexes.json"
+      && firebaseConfig.firestore?.rules === "firestore.rules"
+      && indexesConfig.indexes?.length === 1
+      && indexesConfig.indexes[0]?.collectionGroup === "lgpd_requests"
+      && indexesConfig.indexes[0]?.queryScope === "COLLECTION"
+      && JSON.stringify(indexesConfig.indexes[0]?.fields) === JSON.stringify([
+        { fieldPath: "type", order: "ASCENDING" },
+        { fieldPath: "receivedAt", order: "DESCENDING" },
+      ])
+      && Array.isArray(indexesConfig.fieldOverrides));
   console.log(`\n${passed} testes da UI LGPD dashboard passaram`);
 }
 

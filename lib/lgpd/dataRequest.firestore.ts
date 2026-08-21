@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldPath, FieldValue } from "firebase-admin/firestore";
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Cart, Contact, Enrollment, Job, Order } from "@/types";
 import {
@@ -16,6 +16,7 @@ import {
   type DataRequestEvidence,
   type DataRequestExport,
   type DataRequestDashboardItem,
+  type DataRequestDashboardCursor,
   type DataRequestOrder,
   type DataRequestRepository,
   type MessagingSummary,
@@ -58,7 +59,8 @@ export interface DataRequestDashboardListRepository {
   listForDashboard(
     storeId: string,
     limit: number,
-  ): Promise<DataRequestDashboardItem[]>;
+    cursor?: DataRequestDashboardCursor,
+  ): Promise<{ items: DataRequestDashboardItem[]; hasMore: boolean }>;
 }
 
 export type FirestoreDataRequestRepository = DataRequestRepository
@@ -226,15 +228,17 @@ export function createFirestoreDataRequestRepository(
   hooks: DataRequestHooks = {},
 ): FirestoreDataRequestRepository {
   return {
-    async listForDashboard(storeId, limit) {
+    async listForDashboard(storeId, limit, cursor) {
       const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 50));
-      // `type == ...` usa apenas o indice simples automatico. A ordenacao e
-      // feita depois da projecao para nao introduzir um indice composto novo.
-      const snapshot = await col(storeId, "lgpd_requests")
+      let query = col(storeId, "lgpd_requests")
         .where("type", "==", "customers/data_request")
-        .limit(safeLimit)
-        .get();
-      return snapshot.docs
+        .orderBy("receivedAt", "desc")
+        .orderBy(FieldPath.documentId(), "desc")
+        .limit(safeLimit + 1);
+      if (cursor) query = query.startAfter(cursor.receivedAt, cursor.requestId);
+      const snapshot = await query.get();
+      const items = snapshot.docs
+        .slice(0, safeLimit)
         .map((document): DataRequestDashboardItem => {
           const value = document.data() as Partial<DataRequestEvidence>;
           const compileStatus = value.compileStatus === "pending"
@@ -260,8 +264,8 @@ export function createFirestoreDataRequestRepository(
               ? { deliveredAt: value.deliveredAt }
               : {}),
           };
-        })
-        .sort((left, right) => right.receivedAt - left.receivedAt);
+        });
+      return { items, hasMore: snapshot.docs.length > safeLimit };
     },
 
     async begin(payload, now) {

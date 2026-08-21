@@ -34,6 +34,7 @@ async function main() {
     createDataRequestGetHandler,
   } = await import("../app/api/dashboard/data-requests/[requestId]/route");
   const { GET: LIST_GET } = await import("../app/api/dashboard/data-requests/route");
+  const { decodeDataRequestCursor } = await import("../lib/lgpd/dataRequestPagination");
 
   let passed = 0;
   const check = (label: string, condition: boolean) => {
@@ -169,16 +170,59 @@ async function main() {
 
   async function callList(
     storeId: string | null,
+    cursor?: string,
     extraHeaders: Record<string, string> = {},
   ) {
     const headers = new Headers(extraHeaders);
     if (storeId) headers.set("authorization", `Bearer ${sessionToken(storeId)}`);
     const request = new NextRequest(
-      "https://app.test/api/dashboard/data-requests?storeId=store-b",
+      `https://app.test/api/dashboard/data-requests?storeId=store-b${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       { headers },
     );
     const response = await LIST_GET(request);
     return { response, text: await response.text() };
+  }
+
+  function paginationRequestId(value: number) {
+    return value.toString(16).padStart(64, "0");
+  }
+
+  function paginationReceivedAt(value: number) {
+    return Math.floor(value / 3) * 1_000;
+  }
+
+  async function seedPaginationStore(storeId: string, count: number, offset: number) {
+    await clear(storeId);
+    const batch = db.batch();
+    batch.set(db.doc(`stores/${storeId}`), { status: "active" });
+    const expected: Array<{ requestId: string; receivedAt: number }> = [];
+    for (let index = 0; index < count; index++) {
+      const value = offset + index;
+      const requestId = paginationRequestId(value);
+      const receivedAt = paginationReceivedAt(index);
+      expected.push({ requestId, receivedAt });
+      batch.set(db.doc(`stores/${storeId}/lgpd_requests/${requestId}`), {
+        type: "customers/data_request",
+        status: "completed",
+        compileStatus: "completed",
+        deliveryStatus: "pending",
+        receivedAt,
+        customerKeyHashes: [`internal-hash-${storeId}-${index}`],
+        leaseId: `internal-lease-${index}`,
+        errorCode: "internal-only",
+      });
+    }
+    batch.set(db.doc(`stores/${storeId}/lgpd_requests/other-customer-redact`), {
+      type: "customers/redact",
+      receivedAt: 999_999,
+    });
+    batch.set(db.doc(`stores/${storeId}/lgpd_requests/other-store-redact`), {
+      type: "store/redact",
+      receivedAt: 999_998,
+    });
+    await batch.commit();
+    return expected.sort((left, right) =>
+      right.receivedAt - left.receivedAt || right.requestId.localeCompare(left.requestId));
   }
 
   await Promise.all([
@@ -199,13 +243,13 @@ async function main() {
     email: subject.email,
   });
 
-  const listWithoutSession = await callList(null, { "x-store-id": "store-a" });
+  const listWithoutSession = await callList(null, undefined, { "x-store-id": "store-a" });
   check("listagem sem sessao rejeita x-store-id e query storeId",
     listWithoutSession.response.status === 401);
 
   const listA = await callList("store-a");
   const listABody = JSON.parse(listA.text) as Record<string, any>;
-  const listedRequests = Array.isArray(listABody.requests) ? listABody.requests : [];
+  const listedRequests = Array.isArray(listABody.items) ? listABody.items : [];
   check("listagem usa store da sessao e retorna somente data requests da store A",
     listA.response.status === 200
       && listedRequests.length === 1
@@ -220,6 +264,83 @@ async function main() {
       && !listA.text.includes("errorCode"));
   check("listagem e no-store", listA.response.headers.get("cache-control")
     === "private, no-store, max-age=0");
+
+  const [expectedPagination, expectedOtherStore] = await Promise.all([
+    seedPaginationStore("store-pagination", 120, 0),
+    seedPaginationStore("store-pagination-b", 60, 1_000),
+  ]);
+  const paginationPage1 = await callList("store-pagination");
+  const paginationBody1 = JSON.parse(paginationPage1.text) as Record<string, any>;
+  const page1Items = Array.isArray(paginationBody1.items) ? paginationBody1.items : [];
+  check("paginacao page 1 contem as 50 requests mais recentes reais",
+    page1Items.map((item: any) => item.requestId).join(",")
+      === expectedPagination.slice(0, 50).map((item) => item.requestId).join(",")
+      && typeof paginationBody1.nextCursor === "string");
+
+  await db.doc(`stores/store-pagination/lgpd_requests/${"f".repeat(64)}`).set({
+    type: "customers/data_request",
+    status: "completed",
+    compileStatus: "completed",
+    deliveryStatus: "pending",
+    receivedAt: 999_999,
+  });
+  const paginationPage2 = await callList("store-pagination", paginationBody1.nextCursor);
+  const paginationBody2 = JSON.parse(paginationPage2.text) as Record<string, any>;
+  const page2Items = Array.isArray(paginationBody2.items) ? paginationBody2.items : [];
+  const paginationPage3 = await callList("store-pagination", paginationBody2.nextCursor);
+  const paginationBody3 = JSON.parse(paginationPage3.text) as Record<string, any>;
+  const page3Items = Array.isArray(paginationBody3.items) ? paginationBody3.items : [];
+  check("paginacao page 2 contem as 50 requests seguintes",
+    page2Items.map((item: any) => item.requestId).join(",")
+      === expectedPagination.slice(50, 100).map((item) => item.requestId).join(","));
+  check("paginacao page 3 contem o restante e encerra cursor",
+    page3Items.map((item: any) => item.requestId).join(",")
+      === expectedPagination.slice(100).map((item) => item.requestId).join(",")
+      && paginationBody3.nextCursor === null);
+
+  const allPaginationItems = [...page1Items, ...page2Items, ...page3Items];
+  const allPaginationIds = allPaginationItems.map((item: any) => item.requestId);
+  check("paginacao possui zero duplicata e zero item perdido",
+    new Set(allPaginationIds).size === 120
+      && allPaginationIds.length === 120
+      && expectedPagination.every((item) => allPaginationIds.includes(item.requestId)));
+  check("requests de outros tipos nunca aparecem",
+    allPaginationItems.every((item: any) => /^[a-f0-9]{64}$/.test(item.requestId)));
+  check("receivedAt empatado usa documentId descendente como tie-breaker",
+    allPaginationIds.join(",") === expectedPagination.map((item) => item.requestId).join(","));
+  check("request nova depois da page 1 nao desloca paginacao para tras",
+    !allPaginationIds.includes("f".repeat(64)));
+
+  const cursorData = decodeDataRequestCursor(paginationBody1.nextCursor);
+  const decodedCursorText = Buffer.from(paginationBody1.nextCursor, "base64url").toString("utf8");
+  check("nextCursor contem somente receivedAt e requestId sem PII/store",
+    Object.keys(cursorData).sort().join(",") === "receivedAt,requestId"
+      && !decodedCursorText.includes("store-pagination")
+      && !decodedCursorText.includes(subject.email));
+
+  const malformedCursor = await callList("store-pagination", "not-a-valid-cursor");
+  check("cursor malformado retorna 400 seguro sem PII",
+    malformedCursor.response.status === 400
+      && !malformedCursor.text.includes(subject.email)
+      && !malformedCursor.text.includes("customerKeyHashes"));
+
+  const otherStorePage = await callList("store-pagination-b");
+  const otherStoreBody = JSON.parse(otherStorePage.text) as Record<string, any>;
+  const foreignCursorOnA = await callList("store-pagination", otherStoreBody.nextCursor);
+  const foreignCursorBody = JSON.parse(foreignCursorOnA.text) as Record<string, any>;
+  const foreignCursorItems = Array.isArray(foreignCursorBody.items) ? foreignCursorBody.items : [];
+  const otherStoreIds = new Set(expectedOtherStore.map((item) => item.requestId));
+  check("cursor da store B nunca le dados da store B em sessao da store A",
+    foreignCursorOnA.response.status === 200
+      && foreignCursorItems.every((item: any) => !otherStoreIds.has(item.requestId)));
+  check("metadata paginada permanece sem PII e campos internos",
+    allPaginationItems.every((item: any) => {
+      const fields = Object.keys(item).sort().join(",");
+      return fields === "compileStatus,deliveryStatus,receivedAt,requestId"
+        || fields === "compileStatus,deliveredAt,deliveryStatus,receivedAt,requestId";
+    })
+      && !JSON.stringify(allPaginationItems).includes("internal-hash")
+      && !JSON.stringify(allPaginationItems).includes("internal-lease"));
 
   const first = await call(GET, "store-a", requestA);
   const firstBody = JSON.parse(first.text) as Record<string, any>;
