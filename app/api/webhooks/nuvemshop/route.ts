@@ -1,11 +1,7 @@
-// Receiver de webhooks. Responde 200 rapido; processamento pesado e assincrono.
-// Valida HMAC, trata eventos LGPD na hora e enfileira pedidos para o motor.
+// Receiver de webhooks. Eventos de pedido sao persistidos em inbox duravel
+// antes do 2xx; processamento comercial ocorre em worker separado.
 import { NextRequest, NextResponse } from "next/server";
-import { verifyHmac } from "@/lib/nuvemshop/webhooks";
 import { db, col, storeRef } from "@/lib/firebase/admin";
-import { handleOrderEvent } from "@/lib/rules/process";
-import { eventKey } from "@/lib/webhooks/idempotency";
-import { firestoreEventClaim } from "@/lib/webhooks/idempotency.firestore";
 import { handleAppUninstalled } from "@/lib/lifecycle/uninstall";
 import { lgpdEventSchema } from "@/lib/lgpd/model";
 import { processCustomerRedact } from "@/lib/lgpd/customerRedact";
@@ -18,6 +14,12 @@ import {
 } from "@/lib/lgpd/dataRequest";
 import { firestoreDataRequestRepository } from "@/lib/lgpd/dataRequest.firestore";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { parseSignedWebhookRequest } from "@/lib/webhooks/request";
+import {
+  ingestOrderWebhook,
+  isOrderWebhookEvent,
+} from "@/lib/webhooks/inbox";
+import { firestoreWebhookInboxRepository } from "@/lib/webhooks/inbox.firestore";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -27,24 +29,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const raw = await req.text();
   const signature = req.headers.get("x-linkedstore-hmac-sha256");
-
-  if (!verifyHmac(raw, signature)) {
-    return NextResponse.json({ error: "assinatura invalida" }, { status: 401 });
-  }
-
-  let payload: {
-    event: string;
-    store_id: number;
-    id?: number; // id do recurso (ex.: pedido)
-  };
-  try {
-    payload = JSON.parse(raw) as typeof payload;
-  } catch {
-    return NextResponse.json({ error: "payload invalido" }, { status: 400 });
-  }
-  if (!payload || typeof payload.event !== "string" || payload.store_id == null) {
-    return NextResponse.json({ error: "payload invalido" }, { status: 400 });
-  }
+  const parsed = parseSignedWebhookRequest(raw, signature);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+  const payload = parsed.payload;
   const storeId = String(payload.store_id);
 
   switch (payload.event) {
@@ -116,27 +103,21 @@ export async function POST(req: NextRequest) {
       // fluxos com gatilho "pedido enviado" (ex.: rastreio no WhatsApp).
       // order/cancelled: cancela enrollments/jobs pendentes desse pedido.
       //
-      // Idempotencia (B2): a Nuvemshop reentrega webhooks. Sem dedup, cada
-      // reentrega de order/paid criava enrollments/jobs duplicados -> mensagens
-      // em dobro. Reivindica o evento de forma ATOMICA (create-if-not-exists);
-      // duplicata (inclusive concorrente) vira no-op. Se o processamento falhar,
-      // libera a reivindicacao e responde 500 para a Nuvemshop reentregar.
-      if (payload.id == null) {
+      // O request termina depois da persistencia tenant-scoped. Nenhuma API
+      // externa, sincronizacao ou criacao de efeitos comerciais ocorre aqui.
+      if (
+        !isOrderWebhookEvent(payload.event)
+        || (typeof payload.id !== "string" && typeof payload.id !== "number")
+        || String(payload.id).trim().length === 0
+      ) {
         return NextResponse.json({ error: "evento de pedido sem id" }, { status: 400 });
       }
-      const key = eventKey(payload.event, payload.id);
-      const first = await firestoreEventClaim.claim(storeId, key);
-      if (!first) {
-        return NextResponse.json({ ok: true, deduped: true });
-      }
-      try {
-        await handleOrderEvent(storeId, String(payload.id), payload.event);
-      } catch (err) {
-        await firestoreEventClaim.release(storeId, key);
-        console.error("[webhook nuvemshop] falha ao processar", key, err);
-        return NextResponse.json({ error: "falha ao processar" }, { status: 500 });
-      }
-      break;
+      const result = await ingestOrderWebhook(firestoreWebhookInboxRepository, {
+        storeId,
+        event: payload.event,
+        resourceId: String(payload.id),
+      });
+      return NextResponse.json(result.body, { status: result.httpStatus });
     }
 
     default:

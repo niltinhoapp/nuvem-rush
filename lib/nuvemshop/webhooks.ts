@@ -16,7 +16,8 @@ export const REQUIRED_WEBHOOK_EVENTS = [
 
 export function verifyHmac(rawBody: string, signature: string | null): boolean {
   if (!signature) return false;
-  const secret = process.env.NUVEMSHOP_CLIENT_SECRET ?? "";
+  const secret = process.env.NUVEMSHOP_CLIENT_SECRET;
+  if (!secret?.trim()) return false;
   const expected = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
