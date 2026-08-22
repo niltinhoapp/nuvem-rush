@@ -95,11 +95,15 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   // provider e iniciado sem nenhum await entre a decisao e a chamada externa.
   const delivery = await runWithFinalCommercialGuard(
     async () => {
-      const preSendStore = await storeRef(storeId).get();
-      const preSendJob = await jobRef.get();
+      const [preSendStore, preSendJob, preSendEnrollment] = await Promise.all([
+        storeRef(storeId).get(),
+        jobRef.get(),
+        col(storeId, "enrollments").doc(job.enrollmentId).get(),
+      ]);
       return {
         storeActive: isStoreCommerciallyActive(preSendStore.data()?.status),
         jobProcessing: preSendJob.data()?.status === "processing",
+        enrollmentActive: preSendEnrollment.data()?.status === "active",
       };
     },
     async () => {
@@ -122,9 +126,20 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   if (delivery.status === "guard_failed") throw delivery.error;
   if (delivery.status === "blocked") {
     if (delivery.state.jobProcessing) {
-      await jobRef.update({ status: "cancelled", cancelReason: "store_inactive" });
+      await jobRef.update({
+        status: "cancelled",
+        cancelReason: !delivery.state.storeActive ? "store_inactive" : "enrollment_inactive",
+      });
     }
-    return { ok: true, status: "cancelled", reason: "loja inativa antes do envio" };
+    return {
+      ok: true,
+      status: "cancelled",
+      reason: !delivery.state.storeActive
+        ? "loja inativa antes do envio"
+        : !delivery.state.enrollmentActive
+          ? "enrollment inativo antes do envio"
+          : "job cancelado antes do envio",
+    };
   }
 
   // APENAS falha do provider dispara retry. O bookkeeping pos-sucesso fica
@@ -161,20 +176,43 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
   // andamento, o handler ja cancelou o job e esta transacao NAO pode
   // sobrescrever cancelled com sent nem consumir cota.
   const finalized = await db.runTransaction(async (tx) => {
-    const finalStore = await tx.get(storeRef(storeId));
-    const finalJob = await tx.get(jobRef);
+    const [finalStore, finalJob, finalEnrollment] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(jobRef),
+      tx.get(col(storeId, "enrollments").doc(job.enrollmentId)),
+    ]);
     if (
       !isStoreCommerciallyActive(finalStore.data()?.status)
       || finalJob.data()?.status !== "processing"
-    ) return false;
+      || finalEnrollment.data()?.status !== "active"
+    ) {
+      return {
+        ok: false as const,
+        storeActive: isStoreCommerciallyActive(finalStore.data()?.status),
+        jobStatus: finalJob.data()?.status,
+        enrollmentActive: finalEnrollment.data()?.status === "active",
+      };
+    }
     tx.update(jobRef, { status: "sent" });
     tx.update(storeRef(storeId), {
       [quotaUsageField(isWhatsapp)]: FieldValue.increment(1),
     });
-    return true;
+    return { ok: true as const };
   });
-  if (!finalized) {
-    return { ok: true, status: "cancelled", reason: "loja inativa apos envio" };
+  if (!finalized.ok) {
+    // O provider ja foi invocado; uma desinstalacao/cancelamento concorrente
+    // nao pode desfazer o efeito externo. Preservamos cancelled e registramos
+    // a limitacao sem consumir cota nem afirmar falsamente que o job foi sent.
+    await col(storeId, "logs").add({
+      jobId,
+      channel: step.action,
+      status: "provider_completed_not_finalized",
+      storeActive: finalized.storeActive,
+      jobStatus: finalized.jobStatus ?? "missing",
+      enrollmentActive: finalized.enrollmentActive,
+      at: Date.now(),
+    });
+    return { ok: true, status: "cancelled", reason: "provider iniciado antes do cancelamento" };
   }
   await col(storeId, "logs").add({
     jobId, channel: step.action, status: "sent", at: Date.now(),

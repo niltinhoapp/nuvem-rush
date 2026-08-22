@@ -24,6 +24,7 @@ function fakeRepository(
   const unsupported = async () => { throw new Error("nao usado neste teste"); };
   return {
     receive,
+    listDue: unsupported,
     claim: unsupported,
     complete: unsupported,
     retry: unsupported,

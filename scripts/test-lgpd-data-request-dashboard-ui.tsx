@@ -183,13 +183,13 @@ async function main() {
   check("J nenhum localStorage/sessionStorage", !/localStorage|sessionStorage/.test(clientSources));
   check("K nenhum console na UI de dados", !/console\./.test(clientSources));
   check("L nenhuma URL publica, signed URL ou Storage", !/signedUrl|firebase\/storage|@vercel\/blob|storageBucket/.test(clientSources));
+  const lgpdIndex = indexesConfig.indexes?.find((index: Record<string, unknown>) =>
+    index.collectionGroup === "lgpd_requests");
   check("indice composto possui sintaxe e campos esperados",
     firebaseConfig.firestore?.indexes === "firestore.indexes.json"
       && firebaseConfig.firestore?.rules === "firestore.rules"
-      && indexesConfig.indexes?.length === 1
-      && indexesConfig.indexes[0]?.collectionGroup === "lgpd_requests"
-      && indexesConfig.indexes[0]?.queryScope === "COLLECTION"
-      && JSON.stringify(indexesConfig.indexes[0]?.fields) === JSON.stringify([
+      && lgpdIndex?.queryScope === "COLLECTION"
+      && JSON.stringify(lgpdIndex?.fields) === JSON.stringify([
         { fieldPath: "type", order: "ASCENDING" },
         { fieldPath: "receivedAt", order: "DESCENDING" },
       ])

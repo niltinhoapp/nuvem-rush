@@ -1,6 +1,30 @@
 {
   "indexes": [
     {
+      "collectionGroup": "webhook_inbox",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "receivedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "webhook_inbox",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "webhook_inbox",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "claimedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "lgpd_requests",
       "queryScope": "COLLECTION",
       "fields": [

@@ -11,6 +11,7 @@ type State = {
   flows: number;
   quota: number;
   job: JobStatus;
+  enrollmentActive: boolean;
   providerCalls: number;
 };
 
@@ -45,6 +46,7 @@ async function guardedDispatch(
     async () => ({
       storeActive: state.storeStatus === "active",
       jobProcessing: state.job === "processing",
+      enrollmentActive: state.enrollmentActive,
     }),
     async () => {
       state.providerCalls++;
@@ -63,7 +65,10 @@ async function guardedDispatch(
 }
 
 function fixture(job: JobStatus = "scheduled"): State {
-  return { storeStatus: "active", plan: "essencial", token: "test-only", flows: 5, quota: 0, job, providerCalls: 0 };
+  return {
+    storeStatus: "active", plan: "essencial", token: "test-only", flows: 5,
+    quota: 0, job, enrollmentActive: true, providerCalls: 0,
+  };
 }
 
 async function main() {

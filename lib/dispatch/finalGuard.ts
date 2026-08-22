@@ -1,6 +1,7 @@
 export type FinalCommercialState = {
   storeActive: boolean;
   jobProcessing: boolean;
+  enrollmentActive: boolean;
 };
 
 export type GuardedEffectResult =
@@ -25,7 +26,7 @@ export async function runWithFinalCommercialGuard(
     return { status: "guard_failed", error };
   }
 
-  if (!state.storeActive || !state.jobProcessing) {
+  if (!state.storeActive || !state.jobProcessing || !state.enrollmentActive) {
     return { status: "blocked", state };
   }
 

@@ -68,11 +68,12 @@ async function main() {
 
   const workerA = await repository.claim({ storeId: "store-a", key, leaseId: "lease-a", now: 2_000 });
   const workerBFresh = await repository.claim({ storeId: "store-a", key, leaseId: "lease-b", now: 2_001 });
-  check("lease fresco permite somente um worker", workerA?.leaseId === "lease-a" && workerBFresh === null);
+  check("lease fresco permite somente um worker", workerA?.envelope.leaseId === "lease-a" && workerBFresh === null);
 
   const reclaimAt = 2_000 + WEBHOOK_INBOX_LEASE_MS;
   const workerB = await repository.claim({ storeId: "store-a", key, leaseId: "lease-b", now: reclaimAt });
-  check("crash processing e recuperado apos expiracao", workerB?.leaseId === "lease-b" && workerB.attempts === 2);
+  check("crash processing e recuperado apos expiracao", workerB?.envelope.leaseId === "lease-b"
+    && workerB.envelope.attempts === 2);
 
   const oldComplete = await repository.complete({ storeId: "store-a", key, leaseId: "lease-a", now: reclaimAt + 1 });
   const oldRetry = await repository.retry({
@@ -104,7 +105,7 @@ async function main() {
   });
   check("retry persiste apenas codigo sanitizado e respeita backoff", retry.updated
     && retry.status === "retry" && retryDoc?.lastError === "NUVEMSHOP_TRANSIENT"
-    && tooEarly === null && due?.leaseId === "retry-2");
+    && tooEarly === null && due?.envelope.leaseId === "retry-2");
 
   console.log(`\n${passed} testes Firestore Emulator da inbox passaram`);
 }

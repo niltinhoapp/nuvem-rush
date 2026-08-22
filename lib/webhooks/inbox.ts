@@ -45,14 +45,26 @@ export type ReceiveWebhookInput = {
 
 export type ReceiveWebhookResult = "created" | "duplicate" | "discarded";
 
+export type DueWebhookEnvelope = {
+  storeId: string;
+  key: string;
+  envelope: WebhookInboxEnvelope;
+};
+
+export type ClaimedWebhookEnvelope = {
+  envelope: WebhookInboxEnvelope;
+  storeActive: boolean;
+};
+
 export interface WebhookInboxRepository {
   receive(input: ReceiveWebhookInput): Promise<ReceiveWebhookResult>;
+  listDue(now: number, limit: number): Promise<DueWebhookEnvelope[]>;
   claim(params: {
     storeId: string;
     key: string;
     leaseId: string;
     now: number;
-  }): Promise<WebhookInboxEnvelope | null>;
+  }): Promise<ClaimedWebhookEnvelope | null>;
   complete(params: { storeId: string; key: string; leaseId: string; now: number }): Promise<boolean>;
   retry(params: {
     storeId: string;

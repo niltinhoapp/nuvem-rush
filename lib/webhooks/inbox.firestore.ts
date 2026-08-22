@@ -3,6 +3,8 @@ import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
   canClaimWebhookEnvelope,
   webhookInboxRetryPlan,
+  WEBHOOK_INBOX_LEASE_MS,
+  type DueWebhookEnvelope,
   type WebhookInboxEnvelope,
   type WebhookInboxErrorCode,
   type WebhookInboxRepository,
@@ -10,6 +12,32 @@ import {
 
 function inboxRef(storeId: string, key: string) {
   return col(storeId, "webhook_inbox").doc(key);
+}
+
+function dueTime(candidate: DueWebhookEnvelope): number {
+  if (candidate.envelope.status === "retry") {
+    return candidate.envelope.nextAttemptAt ?? Number.MAX_SAFE_INTEGER;
+  }
+  if (candidate.envelope.status === "processing") {
+    return (candidate.envelope.claimedAt ?? Number.MAX_SAFE_INTEGER) + WEBHOOK_INBOX_LEASE_MS;
+  }
+  return candidate.envelope.receivedAt;
+}
+
+function candidateFromSnapshot(
+  snapshot: FirebaseFirestore.QueryDocumentSnapshot,
+): DueWebhookEnvelope | null {
+  const segments = snapshot.ref.path.split("/");
+  if (
+    segments.length !== 4
+    || segments[0] !== "stores"
+    || segments[2] !== "webhook_inbox"
+  ) return null;
+  return {
+    storeId: segments[1]!,
+    key: segments[3]!,
+    envelope: snapshot.data() as WebhookInboxEnvelope,
+  };
 }
 
 function terminalUpdate(
@@ -55,6 +83,40 @@ export const firestoreWebhookInboxRepository: WebhookInboxRepository = {
     });
   },
 
+  async listDue(now, limit) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("webhook_inbox_invalid_batch_limit");
+    }
+    const group = db.collectionGroup("webhook_inbox");
+    const leaseCutoff = now - WEBHOOK_INBOX_LEASE_MS;
+    const [received, retries, expired] = await Promise.all([
+      group.where("status", "==", "received").orderBy("receivedAt", "asc").limit(limit).get(),
+      group.where("status", "==", "retry")
+        .where("nextAttemptAt", "<=", now)
+        .orderBy("nextAttemptAt", "asc")
+        .limit(limit)
+        .get(),
+      group.where("status", "==", "processing")
+        .where("claimedAt", "<=", leaseCutoff)
+        .orderBy("claimedAt", "asc")
+        .limit(limit)
+        .get(),
+    ]);
+
+    const unique = new Map<string, DueWebhookEnvelope>();
+    for (const snapshot of [...received.docs, ...retries.docs, ...expired.docs]) {
+      const candidate = candidateFromSnapshot(snapshot);
+      if (candidate) unique.set(snapshot.ref.path, candidate);
+    }
+    return [...unique.values()]
+      .sort((a, b) =>
+        dueTime(a) - dueTime(b)
+        || a.envelope.receivedAt - b.envelope.receivedAt
+        || a.storeId.localeCompare(b.storeId)
+        || a.key.localeCompare(b.key))
+      .slice(0, limit);
+  },
+
   async claim(params) {
     const ref = inboxRef(params.storeId, params.key);
     return db.runTransaction(async (tx) => {
@@ -62,7 +124,7 @@ export const firestoreWebhookInboxRepository: WebhookInboxRepository = {
         tx.get(storeRef(params.storeId)),
         tx.get(ref),
       ]);
-      if (!isStoreCommerciallyActive(store.data()?.status) || !current.exists) return null;
+      if (!current.exists) return null;
       const envelope = current.data() as WebhookInboxEnvelope;
       if (!canClaimWebhookEnvelope(envelope, params.now)) return null;
 
@@ -76,7 +138,10 @@ export const firestoreWebhookInboxRepository: WebhookInboxRepository = {
         completedAt: null,
       };
       tx.set(ref, claimed);
-      return claimed;
+      return {
+        envelope: claimed,
+        storeActive: isStoreCommerciallyActive(store.data()?.status),
+      };
     });
   },
 

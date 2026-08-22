@@ -75,7 +75,8 @@ async function createEnrollmentWithJobs(
 }
 
 // Ponto de entrada do webhook: sincroniza o pedido e roda o motor.
-type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled" | "order/cancelled";
+export type OrderWebhookEvent = "order/paid" | "order/created" | "order/fulfilled" | "order/cancelled";
+export type OrderHandlingResult = "processed" | "inactive";
 
 const EVENT_MAP: Record<OrderWebhookEvent, "paid" | "created" | "fulfilled" | "cancelled"> = {
   "order/paid": "paid",
@@ -88,17 +89,17 @@ export async function handleOrderEvent(
   storeId: string,
   nsOrderId: string,
   event: OrderWebhookEvent,
-): Promise<void> {
+): Promise<OrderHandlingResult> {
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
-  if (!store || store.status !== "active") return;
+  if (!store || store.status !== "active") return "inactive";
 
   const { order, contact } = await syncOrder(storeId, store.accessToken, nsOrderId, EVENT_MAP[event]);
 
   // Pedido cancelado -> nao ha "trigger" a avaliar, so cancela o que ja
   // estava agendado para esse pedido (ex.: rastreio, cupom de recompra).
   if (event === "order/cancelled") {
-    await cancelOrderFlows(storeId, order.orderId);
-    return;
+    await cancelOrderCommercialWork(storeId, order.orderId);
+    return "processed";
   }
 
   // Cliente finalizou a compra -> cancela fluxos de recuperacao de carrinho
@@ -108,25 +109,67 @@ export async function handleOrderEvent(
   }
 
   await enrollInFlows(storeId, order, contact, event);
+  return "processed";
 }
 
 // Cancela enrollments (e jobs agendados) vinculados a um pedido que foi
 // cancelado na Nuvemshop — evita mandar rastreio/recompra de venda desfeita.
-async function cancelOrderFlows(storeId: string, orderId: string): Promise<void> {
+export async function cancelOrderCommercialWork(
+  storeId: string,
+  orderId: string,
+  now = Date.now(),
+): Promise<{ inactive: boolean; enrollmentsCancelled: number; jobsCancelled: number }> {
+  const store = await storeRef(storeId).get();
+  if (!isStoreCommerciallyActive(store.data()?.status)) {
+    return { inactive: true, enrollmentsCancelled: 0, jobsCancelled: 0 };
+  }
+
   const snap = await col(storeId, "enrollments")
     .where("orderId", "==", orderId)
     .where("status", "==", "active")
     .get();
 
+  let enrollmentsCancelled = 0;
+  let jobsCancelled = 0;
   for (const doc of snap.docs) {
-    await doc.ref.update({ status: "cancelled" });
+    const cancelled = await db.runTransaction(async (tx) => {
+      const current = await tx.get(doc.ref);
+      if (
+        !current.exists
+        || current.data()?.status !== "active"
+        || current.data()?.orderId !== orderId
+      ) return false;
+      tx.update(doc.ref, {
+        status: "cancelled",
+        cancelledAt: now,
+        cancelReason: "order_cancelled",
+      });
+      return true;
+    });
+    if (!cancelled) continue;
+    enrollmentsCancelled++;
 
-    const jobs = await col(storeId, "jobs")
-      .where("enrollmentId", "==", doc.id)
-      .where("status", "==", "scheduled")
-      .get();
-    for (const j of jobs.docs) await j.ref.update({ status: "cancelled" });
+    for (const status of ["scheduled", "processing"] as const) {
+      const jobs = await col(storeId, "jobs")
+        .where("enrollmentId", "==", doc.id)
+        .where("status", "==", status)
+        .get();
+      for (const job of jobs.docs) {
+        const jobCancelled = await db.runTransaction(async (tx) => {
+          const current = await tx.get(job.ref);
+          if (!current.exists || current.data()?.status !== status) return false;
+          tx.update(job.ref, {
+            status: "cancelled",
+            cancelledAt: now,
+            cancelReason: "order_cancelled",
+          });
+          return true;
+        });
+        if (jobCancelled) jobsCancelled++;
+      }
+    }
   }
+  return { inactive: false, enrollmentsCancelled, jobsCancelled };
 }
 
 // Cancela enrollments de recuperacao de carrinho (e seus jobs agendados) do
