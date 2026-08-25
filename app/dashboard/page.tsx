@@ -15,6 +15,7 @@ import {
 } from "@nimbus-ds/icons";
 import { ErrorBoundary } from "@tiendanube/nexo";
 import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
+import { templateStatusLabel } from "@/lib/whatsapp/templateStatus";
 import type { Flow } from "@/types";
 
 type ConnectionStatus = "loading" | "ready" | "error";
@@ -44,7 +45,12 @@ export default function DashboardPage() {
   const [connection, setConnection] = useState<ConnectionStatus>("loading");
   const [flows, setFlows] = useState<Flow[] | null>(null);
   const [flowsFailed, setFlowsFailed] = useState(false);
-  const [wa, setWa] = useState<{ connected: boolean; phoneNumberId: string | null } | null>(null);
+  const [wa, setWa] = useState<{
+    connected: boolean;
+    phoneNumberId: string | null;
+    templateName: string | null;
+    templateStatus: string | null;
+  } | null>(null);
   const [testState, setTestState] = useState<{ sending: boolean; msg: string }>({
     sending: false,
     msg: "",
@@ -74,7 +80,12 @@ export default function DashboardPage() {
       .then(async (token) => {
         const r = await fetch("/api/whatsapp/connect", { headers: { Authorization: `Bearer ${token}` } });
         const data = await r.json();
-        setWa({ connected: !!data.connected, phoneNumberId: data.phoneNumberId ?? null });
+        setWa({
+          connected: !!data.connected,
+          phoneNumberId: data.phoneNumberId ?? null,
+          templateName: data.templateName ?? null,
+          templateStatus: data.templateStatus ?? null,
+        });
       })
       .catch((e) => console.error("Falha ao checar status do WhatsApp:", e));
   };
@@ -203,7 +214,12 @@ function WhatsappStatusCard({
   onTest,
   testState,
 }: {
-  wa: { connected: boolean; phoneNumberId: string | null } | null;
+  wa: {
+    connected: boolean;
+    phoneNumberId: string | null;
+    templateName: string | null;
+    templateStatus: string | null;
+  } | null;
   onConnect: () => void;
   onRefresh: () => void;
   onTest: (to: string) => void;
@@ -244,6 +260,19 @@ function WhatsappStatusCard({
               </Box>
             )}
           </Box>
+
+          {connected && (
+            <Box display="flex" flexDirection="column" gap="1">
+              <Text fontSize="caption" color="neutral-textLow">
+                Template padrão: {templateStatusLabel(wa?.templateStatus ?? undefined)}
+              </Text>
+              {wa?.templateStatus !== "APPROVED" && (
+                <Text fontSize="caption" color="neutral-textLow">
+                  As automações de WhatsApp só enviarão após a aprovação do template pela Meta.
+                </Text>
+              )}
+            </Box>
+          )}
 
           {/* Envio de teste: valida o canal sem precisar de um pedido real. */}
           <Box display="flex" flexDirection="column" gap="2">

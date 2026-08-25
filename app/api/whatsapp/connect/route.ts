@@ -13,6 +13,7 @@ import {
   subscribeAppToWaba,
   registerPhoneNumber,
   createDefaultTemplate,
+  getDefaultTemplateStatus,
   DEFAULT_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_LANG,
 } from "@/lib/whatsapp/embedded";
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
     connected: wa?.status === "connected",
     phoneNumberId: wa?.phoneNumberId ?? null,
     templateName: wa?.templateName ?? null,
+    templateStatus: wa?.templateStatus ?? null,
   });
 }
 
@@ -66,17 +68,37 @@ export async function POST(req: NextRequest) {
     try {
       await registerPhoneNumber(body.phoneNumberId, accessToken);
     } catch (err) {
-      console.warn(`[whatsapp connect] falha ao registrar numero (${storeId}):`, err);
+      console.warn("[whatsapp connect] phone registration failed", {
+        storeId,
+        errorName: err instanceof Error ? err.name : "unknown",
+      });
     }
 
     // 3. Template padrao de pos-venda na conta DELE (best effort: se falhar,
     //    a conexao vale mesmo assim e o lojista cria depois pela UI da Meta).
     let templateOk = false;
+    let templateStatus: StoreWhatsapp["templateStatus"];
     try {
-      await createDefaultTemplate(body.wabaId, accessToken);
+      const created = await createDefaultTemplate(body.wabaId, accessToken);
       templateOk = true;
+      templateStatus = created.status;
+      if (created.alreadyExisted) {
+        try {
+          // Reconexao nao pressupoe aprovacao: so libera o envio se a leitura
+          // atual da Meta confirmar explicitamente APPROVED.
+          templateStatus = await getDefaultTemplateStatus(body.wabaId, accessToken);
+        } catch (err) {
+          console.warn("[whatsapp connect] template status lookup failed", {
+            storeId,
+            errorName: err instanceof Error ? err.name : "unknown",
+          });
+        }
+      }
     } catch (err) {
-      console.warn(`[whatsapp connect] template nao criado (${storeId}):`, err);
+      console.warn("[whatsapp connect] template creation failed", {
+        storeId,
+        errorName: err instanceof Error ? err.name : "unknown",
+      });
     }
 
     const whatsapp: StoreWhatsapp = {
@@ -85,7 +107,13 @@ export async function POST(req: NextRequest) {
       accessToken, // TODO: criptografar em repouso (KMS)
       status: "connected",
       ...(templateOk
-        ? { templateName: DEFAULT_TEMPLATE_NAME, templateLang: DEFAULT_TEMPLATE_LANG }
+        ? {
+          templateName: DEFAULT_TEMPLATE_NAME,
+          templateLang: DEFAULT_TEMPLATE_LANG,
+          ...(templateStatus
+            ? { templateStatus, templateStatusUpdatedAt: Date.now() }
+            : {}),
+        }
         : {}),
       connectedAt: Date.now(),
       tokenRefreshedAt: Date.now(),
@@ -99,11 +127,18 @@ export async function POST(req: NextRequest) {
       tx.update(ref, { whatsapp });
     });
 
-    return NextResponse.json({ connected: true, templateCreated: templateOk });
+    return NextResponse.json({
+      connected: true,
+      templateCreated: templateOk,
+      templateStatus: templateStatus ?? null,
+    });
   } catch (err) {
-    console.error(`[whatsapp connect] falha (${storeId}):`, err);
+    console.error("[whatsapp connect] failed", {
+      storeId,
+      errorName: err instanceof Error ? err.name : "unknown",
+    });
     return NextResponse.json(
-      { error: "falha ao conectar WhatsApp", detail: String(err) },
+      { error: "falha ao conectar WhatsApp" },
       { status: 502 },
     );
   }

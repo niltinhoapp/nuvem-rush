@@ -16,6 +16,9 @@
 // fluxo "Provedor de Tecnologia" concluido e uma Configuration do Embedded
 // Signup criada (NEXT_PUBLIC_WHATSAPP_ES_CONFIG_ID).
 
+import { initialTemplateStatus, normalizeTemplateStatus } from "./templateStatus";
+import type { WhatsappTemplateStatus } from "@/types";
+
 const GRAPH = "https://graph.facebook.com/v22.0";
 
 export const DEFAULT_TEMPLATE_NAME = "pos_venda_agradecimento";
@@ -125,7 +128,7 @@ export async function registerPhoneNumber(
 export async function createDefaultTemplate(
   wabaId: string,
   token: string,
-): Promise<{ created: boolean; alreadyExisted: boolean }> {
+): Promise<{ created: boolean; alreadyExisted: boolean; status?: WhatsappTemplateStatus }> {
   const res = await fetch(`${GRAPH}/${wabaId}/message_templates`, {
     method: "POST",
     headers: {
@@ -147,7 +150,16 @@ export async function createDefaultTemplate(
       ],
     }),
   });
-  if (res.ok) return { created: true, alreadyExisted: false };
+  if (res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { status?: unknown };
+    return {
+      created: true,
+      alreadyExisted: false,
+      // A criacao aceita nao comprova aprovacao. Sem status explicito, a Meta
+      // ainda esta avaliando o template e o envio deve ficar bloqueado.
+      status: initialTemplateStatus(body.status),
+    };
+  }
 
   const body = (await res.json().catch(() => ({}))) as {
     error?: { message?: string; error_user_title?: string };
@@ -158,4 +170,27 @@ export async function createDefaultTemplate(
     return { created: false, alreadyExisted: true };
   }
   throw new Error(`criar template: ${msg.trim() || `HTTP ${res.status}`}`);
+}
+
+// Consulta o template ja existente durante reconexao. Essa leitura evita
+// assumir que um template anterior continua aprovado; se nao houver status
+// verificavel, o chamador permanece fail-closed.
+export async function getDefaultTemplateStatus(
+  wabaId: string,
+  token: string,
+): Promise<WhatsappTemplateStatus | undefined> {
+  const url = new URL(`${GRAPH}/${wabaId}/message_templates`);
+  url.searchParams.set("name", DEFAULT_TEMPLATE_NAME);
+  url.searchParams.set("fields", "name,language,status");
+  const body = await graphJson(await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  }));
+  const templates = Array.isArray(body.data) ? body.data : [];
+  const template = templates.find((item): item is Record<string, unknown> =>
+    !!item
+    && typeof item === "object"
+    && (item as Record<string, unknown>).name === DEFAULT_TEMPLATE_NAME
+    && (item as Record<string, unknown>).language === DEFAULT_TEMPLATE_LANG,
+  );
+  return template ? normalizeTemplateStatus(template.status) : undefined;
 }

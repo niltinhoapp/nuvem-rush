@@ -15,7 +15,8 @@
 // whatsappTemplateName/whatsappTemplateLang no step.
 import { col, storeRef } from "@/lib/firebase/admin";
 import { generateWhatsappContent } from "@/lib/ai/openai";
-import type { Cart, Order, Step, Store } from "@/types";
+import { assertCommercialTemplateApproved } from "@/lib/whatsapp/templateStatus";
+import type { Cart, Order, Step, Store, StoreWhatsapp } from "@/types";
 
 // Substitui placeholders {{...}} nos parametros do template pelos dados reais
 // do pedido/carrinho/contato (link de rastreio, link de recuperacao, etc.).
@@ -45,6 +46,7 @@ interface WaCredentials {
   // Template padrao da conta (usado quando o step nao define um).
   defaultTemplateName?: string;
   defaultTemplateLang?: string;
+  defaultTemplateStatus?: StoreWhatsapp["templateStatus"];
 }
 
 // Credenciais POR LOJA (Embedded Signup / Tech Provider): SEMPRE usa o numero
@@ -63,6 +65,7 @@ async function resolveCredentials(storeId: string): Promise<WaCredentials> {
       accessToken: wa.accessToken,
       defaultTemplateName: wa.templateName,
       defaultTemplateLang: wa.templateLang,
+      defaultTemplateStatus: wa.templateStatus,
     };
   }
   throw new Error(
@@ -122,6 +125,19 @@ export async function sendWhatsapp(params: {
     config.whatsappTemplateLang ??
     (config.whatsappTemplateName ? "pt_BR" : creds.defaultTemplateLang) ??
     "pt_BR";
+
+  // Sem catalogo de templates, somente o template default cujo status veio da
+  // Meta pode ser usado comercialmente. Qualquer template desconhecido fica
+  // fail-closed ate ter lifecycle proprio implementado.
+  assertCommercialTemplateApproved({
+    whatsapp: {
+      templateName: creds.defaultTemplateName,
+      templateLang: creds.defaultTemplateLang,
+      templateStatus: creds.defaultTemplateStatus,
+    },
+    name: templateName,
+    language: languageCode,
+  });
 
   let bodyParams = config.whatsappTemplateParams ?? [];
   // Resolve placeholders ({{trackingUrl}}, {{recoveryUrl}}, ...) com dados reais.

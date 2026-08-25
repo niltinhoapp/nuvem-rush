@@ -13,7 +13,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db, col } from "@/lib/firebase/admin";
-import type { Contact } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import {
+  canApplyTemplateStatusUpdate,
+  parseMetaTemplateStatusUpdate,
+  type MetaTemplateStatusUpdate,
+} from "@/lib/whatsapp/templateStatus";
+import type { Contact, Store } from "@/types";
 
 const OPT_OUT_WORDS = ["sair", "parar", "cancelar", "descadastrar", "stop", "pare"];
 
@@ -55,6 +61,11 @@ export async function POST(req: NextRequest) {
     const body = JSON.parse(raw);
     for (const entry of body?.entry ?? []) {
       for (const change of entry?.changes ?? []) {
+        const templateUpdate = parseMetaTemplateStatusUpdate(entry, change);
+        if (templateUpdate) {
+          await updateTemplateStatus(templateUpdate);
+          continue;
+        }
         const value = change?.value;
         const phoneNumberId = value?.metadata?.phone_number_id as string | undefined;
         const messages = value?.messages as Array<{ from?: string; text?: { body?: string } }> | undefined;
@@ -84,6 +95,41 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ received: true });
+}
+
+// O payload oficial identifica a WABA em entry.id; nao usamos numero de
+// telefone para template status. Somente uma store dona da WABA pode ser
+// atualizada, e somente para o template default armazenado nela.
+async function updateTemplateStatus(update: MetaTemplateStatusUpdate): Promise<void> {
+  const candidates = await db
+    .collection("stores")
+    .where("whatsapp.wabaId", "==", update.wabaId)
+    .limit(2)
+    .get();
+  if (candidates.size !== 1) return;
+
+  const ref = candidates.docs[0]!.ref;
+  await db.runTransaction(async (tx) => {
+    const storeSnap = await tx.get(ref);
+    const store = storeSnap.data() as Store | undefined;
+    const whatsapp = store?.whatsapp;
+    if (!store || !canApplyTemplateStatusUpdate({
+      storeActive: isStoreCommerciallyActive(store.status),
+      whatsapp,
+      wabaId: update.wabaId,
+      name: update.name,
+      language: update.language,
+      receivedAt: update.receivedAt,
+    })) return;
+
+    // entry.time e o unico ordering disponibilizado pelo payload oficial. Sem
+    // ele parseMetaTemplateStatusUpdate usa o horario de recebimento; nesse caso a
+    // ordem entre eventos atrasados nao pode ser provada e fica documentada.
+    tx.update(ref, {
+      "whatsapp.templateStatus": update.status,
+      "whatsapp.templateStatusUpdatedAt": update.receivedAt,
+    });
+  });
 }
 
 // Marca opt-out no contato cujo telefone bate com `fromDigits`. Compara pelos

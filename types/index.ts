@@ -49,6 +49,10 @@ export interface StoreWhatsapp {
   // Template padrao de pos-venda criado automaticamente na WABA do lojista.
   templateName?: string;
   templateLang?: string;
+  // Estado canônico do template default, atualizado pelo webhook da Meta.
+  // Qualquer valor diferente de APPROVED bloqueia envio comercial.
+  templateStatus?: WhatsappTemplateStatus;
+  templateStatusUpdatedAt?: number;
   connectedAt: number;
   // O token da config do Embedded Signup expira em 60 dias; o cron
   // /api/cron/refresh-whatsapp-tokens renova mensalmente via fb_exchange_token.
@@ -58,6 +62,16 @@ export interface StoreWhatsapp {
   lastRefreshAttempt?: number;
   refreshFailCount?: number;
 }
+
+// A Meta pode adicionar eventos sem aviso. Preservamos o valor normalizado e
+// tratamos somente APPROVED como liberado para envio.
+export type WhatsappTemplateStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PAUSED"
+  | "DISABLED"
+  | (string & {});
 
 export interface Product {
   productId: string;
