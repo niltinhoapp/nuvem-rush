@@ -40,7 +40,7 @@ async function main() {
 
   const uninstall = readFileSync(new URL("../lib/lifecycle/uninstall.ts", import.meta.url), "utf8");
   assert.match(uninstall, /"scheduled", "processing"/);
-  assert.match(uninstall, /status: "cancelled"/);
+  assert.match(uninstall, /cancelJobAndReleaseQuota/);
   assert.doesNotMatch(uninstall, /delete\(/);
 
   const rules = readFileSync(new URL("../firestore.rules", import.meta.url), "utf8");

@@ -1,4 +1,5 @@
 import { db, col, storeRef } from "@/lib/firebase/admin";
+import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 
 const CANCELLABLE_JOB_STATUSES = ["scheduled", "processing"] as const;
 
@@ -20,15 +21,12 @@ export async function handleAppUninstalled(
       const snap = await col(storeId, "jobs").where("status", "==", status).limit(400).get();
       if (snap.empty) break;
       for (const job of snap.docs) {
-        const cancelled = await db.runTransaction(async (tx) => {
-          const current = await tx.get(job.ref);
-          if (!current.exists || current.data()?.status !== status) return false;
-          tx.update(job.ref, {
-            status: "cancelled",
-            cancelledAt: now,
-            cancelReason: "store_uninstalled",
-          });
-          return true;
+        const cancelled = await cancelJobAndReleaseQuota({
+          storeId,
+          jobRef: job.ref,
+          reason: "store_uninstalled",
+          now,
+          expectedStatus: status,
         });
         if (cancelled) cancelledJobs++;
       }

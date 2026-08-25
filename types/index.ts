@@ -22,9 +22,13 @@ export interface Store {
     // com documentos ja existentes no Firestore).
     dispatchesMonthLimit: number;
     dispatchesMonthUsed: number;
+    // Reservas em voo. Sao contabilizadas junto com `used` antes de iniciar
+    // qualquer provider, evitando que workers concorrentes ultrapassem a cota.
+    dispatchesMonthReserved?: number;
     // Cota de WHATSAPP — separada porque cada mensagem custa ~R$0,33 na Meta.
     whatsappMonthLimit: number;
     whatsappMonthUsed: number;
+    whatsappMonthReserved?: number;
     // Periodo (YYYY-MM) a que os contadores acima se referem. Quando vira o
     // mes, os contadores sao zerados no proximo disparo (ver lib/dispatch.ts).
     periodKey?: string;
@@ -183,6 +187,11 @@ export interface Job {
   // Estado intermediario que impede que dois crons/workers disparem o mesmo job.
   status: "scheduled" | "processing" | "sent" | "failed" | "cancelled";
   claimedAt?: number; // quando o job foi reivindicado (scheduled -> processing)
+  // Fencing da reserva de cota. So o worker que criou este id pode finalizar
+  // ou liberar a reserva; cancelamentos removem o id antes de outro worker agir.
+  quotaReservationId?: string;
+  quotaReservationPeriodKey?: string;
+  quotaReservedAt?: number;
   // Retry (Fase E): tentativas ja feitas, ultimo erro e proxima tentativa
   // (backoff). Em retry o job volta a "scheduled" com runAt = nextAttemptAt.
   attempts?: number;

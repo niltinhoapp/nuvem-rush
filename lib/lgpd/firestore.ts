@@ -10,6 +10,7 @@ import {
   type MinimalLgpdRequest,
 } from "./model";
 import { findCustomerContact } from "./customerLookup.firestore";
+import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 
 const PROCESSING_LEASE_MS = 10 * 60_000;
 
@@ -42,19 +43,20 @@ async function redactRelatedData(
       .where("enrollmentId", "==", enrollment.id)
       .get();
     for (const job of jobs.docs) {
-      const outcome = await db.runTransaction(async (tx) => {
-        const current = await tx.get(job.ref);
-        if (!current.exists) return "missing" as const;
-        const data = current.data() as Job;
-        const commercial = data.status === "scheduled" || data.status === "processing";
-        tx.update(job.ref, {
-          ...(commercial
-            ? { status: "cancelled", cancelledAt: now, cancelReason: "customer_redacted" }
-            : {}),
-          lastError: FieldValue.delete(),
-        });
-        return commercial ? "cancelled" as const : "preserved" as const;
-      });
+      const current = (await job.ref.get()).data() as Job | undefined;
+      const expectedStatus = current?.status;
+      const commercial = expectedStatus === "scheduled" || expectedStatus === "processing";
+      const cancelled = commercial
+        ? await cancelJobAndReleaseQuota({
+          storeId,
+          jobRef: job.ref,
+          reason: "customer_redacted",
+          now,
+          expectedStatus,
+        })
+        : false;
+      if (!commercial) await job.ref.update({ lastError: FieldValue.delete() });
+      const outcome = cancelled ? "cancelled" as const : "preserved" as const;
       if (outcome === "cancelled") counts.jobsCancelled++;
       if (outcome === "preserved") counts.jobsPreserved++;
 

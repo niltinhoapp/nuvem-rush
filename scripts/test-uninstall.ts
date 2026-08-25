@@ -11,7 +11,7 @@ assert.match(uninstall, /runTransaction/);
 assert.match(uninstall, /status: "uninstalled"/);
 assert.match(uninstall, /uninstalledAt/);
 assert.match(uninstall, /"scheduled", "processing"/);
-assert.match(uninstall, /status: "cancelled"/);
+assert.match(uninstall, /cancelJobAndReleaseQuota/);
 assert.doesNotMatch(uninstall, /delete\(/);
 assert.doesNotMatch(uninstall, /accessToken/);
 

@@ -181,7 +181,7 @@ async function main() {
 const dispatchSource = readFileSync(new URL("../lib/dispatch.ts", import.meta.url), "utf8");
 const processSource = readFileSync(new URL("../lib/rules/process.ts", import.meta.url), "utf8");
 assert.match(dispatchSource, /runWithFinalCommercialGuard/);
-assert.match(dispatchSource, /finalJob\.data\(\)\?\.status !== "processing"/);
+assert.match(dispatchSource, /hasMatchingQuotaReservation/);
 assert.match(processSource, /tx\.get\(storeRef\(storeId\)\)/);
 assert.match(processSource, /isStoreCommerciallyActive\(storeSnap\.data\(\)\?\.status\)/);
 

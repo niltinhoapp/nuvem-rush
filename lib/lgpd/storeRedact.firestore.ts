@@ -3,6 +3,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import { lgpdRequestId, minimalRequest } from "./model";
 import type { StoreRedactEvidence, StoreRedactRepository } from "./storeRedact";
+import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 
 const PROCESSING_LEASE_MS = 10 * 60_000;
 const EVIDENCE_COLLECTION = "lgpd_store_redactions";
@@ -42,15 +43,12 @@ async function cancelCommercialJobs(storeId: string, now: number): Promise<numbe
       const jobs = await col(storeId, "jobs").where("status", "==", status).limit(400).get();
       if (jobs.empty) break;
       for (const job of jobs.docs) {
-        const changed = await db.runTransaction(async (tx) => {
-          const current = await tx.get(job.ref);
-          if (!current.exists || current.data()?.status !== status) return false;
-          tx.update(job.ref, {
-            status: "cancelled",
-            cancelledAt: now,
-            cancelReason: "store_redacted",
-          });
-          return true;
+        const changed = await cancelJobAndReleaseQuota({
+          storeId,
+          jobRef: job.ref,
+          reason: "store_redacted",
+          now,
+          expectedStatus: status,
         });
         if (changed) cancelled++;
       }

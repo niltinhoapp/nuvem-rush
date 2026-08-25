@@ -8,6 +8,7 @@ import { syncOrder } from "@/lib/nuvemshop/sync";
 import { enrollmentKey, jobKey, planEnrollment } from "@/lib/rules/enrollmentKey";
 import type { Cart, Contact, Flow, Order, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 
 // Cria o enrollment e agenda os jobs de um flow que casou — IDEMPOTENTE.
 // `origin` liga o enrollment ao pedido ou ao carrinho de origem. A identidade é
@@ -155,15 +156,12 @@ export async function cancelOrderCommercialWork(
         .where("status", "==", status)
         .get();
       for (const job of jobs.docs) {
-        const jobCancelled = await db.runTransaction(async (tx) => {
-          const current = await tx.get(job.ref);
-          if (!current.exists || current.data()?.status !== status) return false;
-          tx.update(job.ref, {
-            status: "cancelled",
-            cancelledAt: now,
-            cancelReason: "order_cancelled",
-          });
-          return true;
+        const jobCancelled = await cancelJobAndReleaseQuota({
+          storeId,
+          jobRef: job.ref,
+          reason: "order_cancelled",
+          now,
+          expectedStatus: status,
         });
         if (jobCancelled) jobsCancelled++;
       }
