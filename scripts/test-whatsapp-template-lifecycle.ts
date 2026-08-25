@@ -77,13 +77,15 @@ function main() {
   const connect = readFileSync(new URL("../app/api/whatsapp/connect/route.ts", import.meta.url), "utf8");
   const webhook = readFileSync(new URL("../app/api/webhooks/whatsapp/route.ts", import.meta.url), "utf8");
   const templateStatus = readFileSync(new URL("../lib/whatsapp/templateStatus.ts", import.meta.url), "utf8");
+  const templateRepository = readFileSync(new URL("../lib/whatsapp/templateStatus.firestore.ts", import.meta.url), "utf8");
   const channel = readFileSync(new URL("../lib/channels/whatsapp.ts", import.meta.url), "utf8");
   const dashboard = readFileSync(new URL("../app/dashboard/page.tsx", import.meta.url), "utf8");
   assert.match(connect, /templateStatus/);
   assert.doesNotMatch(connect, /detail:\s*String\(err\)/);
   assert.match(webhook, /parseMetaTemplateStatusUpdate/);
   assert.match(templateStatus, /message_template_status_update/);
-  assert.match(webhook, /whatsapp\.wabaId/);
+  assert.match(webhook, /updateTemplateStatus/);
+  assert.match(templateRepository, /whatsapp\.wabaId/);
   assert.match(channel, /assertCommercialTemplateApproved/);
   assert.ok(channel.indexOf("assertCommercialTemplateApproved") < channel.indexOf("graph.facebook.com"));
   assert.match(dashboard, /As automações de WhatsApp só enviarão após a aprovação/);
