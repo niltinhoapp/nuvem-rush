@@ -10,9 +10,23 @@ initializeApp({ projectId: process.env.GCLOUD_PROJECT ?? "demo-nuvem-rush-whatsa
 
 async function main() {
   const db = getFirestore();
+  let scenario = "bootstrap";
+  const mark = (next: string) => {
+    scenario = next;
+    console.info(`[WhatsApp template lifecycle Emulator] ${scenario}`);
+  };
   const { parseMetaTemplateStatusUpdate } = await import("../lib/whatsapp/templateStatus");
   const { updateTemplateStatus } = await import("../lib/whatsapp/templateStatus.firestore");
-  const stores = ["template-ambiguous-a", "template-ambiguous-b", "template-a", "template-b", "template-order"];
+  const stores = [
+    "template-ambiguous-a",
+    "template-ambiguous-b",
+    "template-a",
+    "template-b",
+    "template-order-forward",
+    "template-order-reverse",
+    "template-order-rejected",
+    "template-order-duplicate",
+  ];
   for (const storeId of stores) await db.recursiveDelete(db.doc(`stores/${storeId}`));
 
   const templateName = "pos_venda_agradecimento";
@@ -67,6 +81,7 @@ async function main() {
   }
 
   // 1/8: query real limitada a duas stores bloqueia WABA ambigua sem escrita.
+  mark("ambiguous_waba");
   await seed("template-ambiguous-a", "same-waba");
   await seed("template-ambiguous-b", "same-waba");
   const ambiguousQuery = await db.collection("stores")
@@ -79,6 +94,7 @@ async function main() {
   assert.equal((await template("template-ambiguous-b"))?.templateStatus, "PENDING");
 
   // 2/3/7: update transacional na unica tenant, com timestamp oficial em segundos -> ms.
+  mark("tenant_isolation_and_real_update");
   await seed("template-a", "waba-a");
   await seed("template-b", "waba-b");
   assert.equal(await updateTemplateStatus(event("waba-a", "APPROVED", 200)), "updated");
@@ -92,33 +108,41 @@ async function main() {
 
   // 4: concorrencia stale, inclusive com ordem invertida das Promises.
   for (const reverse of [false, true]) {
-    await seed("template-order", "waba-order", "PENDING", 0);
-    const newest = event("waba-order", "APPROVED", 200);
-    const oldest = event("waba-order", "PENDING", 100);
+    mark(reverse ? "concurrent_stale_reverse" : "concurrent_stale_forward");
+    const storeId = reverse ? "template-order-reverse" : "template-order-forward";
+    const wabaId = reverse ? "waba-order-reverse" : "waba-order-forward";
+    await seed(storeId, wabaId, "PENDING", 0);
+    const newest = event(wabaId, "APPROVED", 200);
+    const oldest = event(wabaId, "PENDING", 100);
     await Promise.all(reverse
       ? [updateTemplateStatus(oldest), updateTemplateStatus(newest)]
       : [updateTemplateStatus(newest), updateTemplateStatus(oldest)]);
-    const final = await template("template-order");
+    const final = await template(storeId);
     assert.equal(final?.templateStatus, "APPROVED");
     assert.equal(final?.templateStatusUpdatedAt, 200_000);
   }
 
   // 5: o evento mais novo prevalece mesmo quando ele e terminal/rejeitado.
-  await seed("template-order", "waba-order", "PENDING", 0);
+  mark("rejected_vs_approved");
+  await seed("template-order-rejected", "waba-order-rejected", "PENDING", 0);
   await Promise.all([
-    updateTemplateStatus(event("waba-order", "REJECTED", 200)),
-    updateTemplateStatus(event("waba-order", "APPROVED", 100)),
+    updateTemplateStatus(event("waba-order-rejected", "REJECTED", 200)),
+    updateTemplateStatus(event("waba-order-rejected", "APPROVED", 100)),
   ]);
-  assert.equal((await template("template-order"))?.templateStatus, "REJECTED");
-  assert.equal((await template("template-order"))?.templateStatusUpdatedAt, 200_000);
+  assert.equal((await template("template-order-rejected"))?.templateStatus, "REJECTED");
+  assert.equal((await template("template-order-rejected"))?.templateStatusUpdatedAt, 200_000);
 
   // 6: duplicata e semanticamente idempotente e nao gera erro.
-  const duplicate = event("waba-order", "REJECTED", 200);
+  mark("duplicate");
+  await seed("template-order-duplicate", "waba-order-duplicate", "PENDING", 0);
+  const duplicate = event("waba-order-duplicate", "REJECTED", 200);
+  assert.equal(await updateTemplateStatus(duplicate), "updated");
   const duplicateResults = await Promise.all([updateTemplateStatus(duplicate), updateTemplateStatus(duplicate)]);
-  assert.deepEqual(duplicateResults, ["updated", "updated"]);
-  assert.equal((await template("template-order"))?.templateStatus, "REJECTED");
+  assert.deepEqual(duplicateResults, ["ignored_store_or_template_mismatch", "ignored_store_or_template_mismatch"]);
+  assert.equal((await template("template-order-duplicate"))?.templateStatus, "REJECTED");
 
   // 8: WABA inexistente e ignorada com seguranca.
+  mark("missing_waba");
   assert.equal(await updateTemplateStatus(event("missing-waba", "APPROVED", 200)), "ignored_missing_or_ambiguous_waba");
 
   console.log("WhatsApp template lifecycle Firestore Emulator: OK");

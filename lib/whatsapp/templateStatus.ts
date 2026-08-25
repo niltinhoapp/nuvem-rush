@@ -58,8 +58,12 @@ export function canApplyTemplateStatusUpdate(params: {
     && params.storeActive
     && whatsapp.wabaId === params.wabaId
     && sameTemplate(whatsapp, params.name, params.language)
+    // entry.time tem precisao em segundos. Um evento com o mesmo timestamp ja
+    // aplicado e uma reentrega (ou uma ordem que a Meta nao permite resolver);
+    // nao o regravamos. Isso torna a atualizacao estritamente monotona e evita
+    // que duplicatas concorrentes disputem uma escrita desnecessaria.
     && (typeof whatsapp.templateStatusUpdatedAt !== "number"
-      || whatsapp.templateStatusUpdatedAt <= params.receivedAt);
+      || whatsapp.templateStatusUpdatedAt < params.receivedAt);
 }
 
 function webhookTimeMs(value: unknown): number {

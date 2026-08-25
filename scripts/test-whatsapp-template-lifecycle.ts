@@ -53,11 +53,16 @@ function main() {
 
   // F-H: WABA/name/language isolation and stale/duplicate safety.
   const approved = parseMetaTemplateStatusUpdate(entry, change("APPROVED"))!;
-  assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved }), true);
+  assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved }), false);
   assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved, wabaId: "waba-b" }), false);
   assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved, name: "other_template" }), false);
   assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved, receivedAt: 1_699_999_999_000 }), false);
-  assert.equal(canApplyTemplateStatusUpdate({ storeActive: true, whatsapp: defaultTemplate, ...approved }), true);
+  assert.equal(canApplyTemplateStatusUpdate({
+    storeActive: true,
+    whatsapp: defaultTemplate,
+    ...approved,
+    receivedAt: 1_700_000_001_000,
+  }), true);
 
   // I-N: only the known approved default may pass the commercial send guard.
   assert.doesNotThrow(() => assertCommercialTemplateApproved({
