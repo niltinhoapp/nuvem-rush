@@ -31,6 +31,7 @@ const check = (label: string, ok: boolean) => {
 
 const future = Math.floor(Date.now() / 1000) + 3600;
 const past = Math.floor(Date.now() / 1000) - 10;
+const now = Math.floor(Date.now() / 1000);
 
 delete process.env.NUVEMSHOP_CLIENT_SECRET;
 check("secret ausente rejeita token forjado com chave vazia",
@@ -61,6 +62,26 @@ check("assinatura errada e rejeitada",
 check("token expirado e rejeitado",
   verifySessionToken(makeJwt({ store_id: 1, exp: past })) === null);
 
+check("exp exatamente no instante atual e rejeitado",
+  verifySessionToken(makeJwt({ store_id: 1, exp: now })) === null);
+
+check("exp ausente e rejeitado",
+  verifySessionToken(makeJwt({ store_id: 1 })) === null);
+
+check("exp string e rejeitado",
+  verifySessionToken(makeJwt({ store_id: 1, exp: String(future) })) === null);
+
+// JSON nao representa NaN. O parser real o rejeita antes da validacao de
+// claims; Number.isFinite permanece necessario para numeros JSON que estouram.
+check("exp NaN invalido no JSON e rejeitado",
+  verifySessionToken(makeJwtWithRawPayload('{"store_id":1,"exp":NaN}')) === null);
+
+check("exp Infinity por overflow JSON e rejeitado",
+  verifySessionToken(makeJwtWithRawPayload('{"store_id":1,"exp":1e400}')) === null);
+
+check("exp -Infinity por overflow JSON e rejeitado",
+  verifySessionToken(makeJwtWithRawPayload('{"store_id":1,"exp":-1e400}')) === null);
+
 check("payload JSON invalido e rejeitado",
   verifySessionToken(makeJwtWithRawPayload("{invalido")) === null);
 
@@ -69,10 +90,6 @@ check("token malformado e rejeitado",
 
 check("sem store_id e rejeitado",
   verifySessionToken(makeJwt({ foo: "bar", exp: future })) === null);
-
-// Caracterizacao: nao altera o comportamento atual de exp ausente.
-check("exp ausente continua aceito (comportamento atual)",
-  verifySessionToken(makeJwt({ store_id: 1 }))?.storeId === "1");
 
 // Token Bearer invalido nunca pode cair no atalho de desenvolvimento.
 const mutableEnv = process.env as Record<string, string | undefined>;
