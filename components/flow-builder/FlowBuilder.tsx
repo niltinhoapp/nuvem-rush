@@ -85,6 +85,10 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
     });
   }, [setNodes, setEdges]);
 
+  // Gatilho atual (fluxo linear: 1 trigger por fluxo) — repassado aos steps
+  // só para exibir qual template de WhatsApp cada ação enviaria.
+  const triggerEvent = (nodes.find((n) => n.type === "trigger")?.data.trigger as Trigger | undefined)?.event;
+
   // Reconstroi os data callbacks a cada render (closures atualizadas).
   const nodesWithHandlers = nodes.map((n) => {
     if (n.type === "trigger") {
@@ -100,6 +104,7 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
       ...n,
       data: {
         ...n.data,
+        triggerEvent,
         onChange: (s: Step) => patchNodeData(n.id, { step: s }),
         onRemove: () => removeStep(n.id),
       },

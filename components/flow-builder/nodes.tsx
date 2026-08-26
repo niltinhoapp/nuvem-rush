@@ -17,6 +17,7 @@ import {
   ChecklistIcon,
   MagicWandIcon,
 } from "@nimbus-ds/icons";
+import { catalogTemplateForEvent } from "@/lib/whatsapp/catalog";
 import type {
   Condition,
   ConditionField,
@@ -202,6 +203,10 @@ export function StepNode({ data }: NodeProps) {
   const step = data.step as Step;
   const onChange = data.onChange as (s: Step) => void;
   const onRemove = data.onRemove as () => void;
+  // Gatilho do fluxo (injetado pelo FlowBuilder) — usado só para mostrar qual
+  // template Meta esta acao de WhatsApp vai enviar. Não afeta o roteamento
+  // real, que continua vindo de lib/whatsapp/templateRouting.ts.
+  const triggerEvent = data.triggerEvent as Trigger["event"] | undefined;
 
   const update = (patch: Partial<Step>) => onChange({ ...step, ...patch });
 
@@ -281,7 +286,7 @@ export function StepNode({ data }: NodeProps) {
         ))}
       </Select>
 
-      {(step.action === "email" || step.action === "whatsapp") && (
+      {step.action === "email" && (
         <Box display="flex" flexDirection="column" gap="1">
           <Box display="flex" alignItems="center" gap="1">
             <Icon source={<MagicWandIcon size={14} />} color="ai-generative" />
@@ -295,6 +300,29 @@ export function StepNode({ data }: NodeProps) {
             value={step.aiPrompt ?? ""}
             onChange={(e) => update({ aiPrompt: e.target.value })}
           />
+        </Box>
+      )}
+
+      {step.action === "whatsapp" && (
+        <Box display="flex" flexDirection="column" gap="1">
+          <Icon source={<WhatsappIcon size={14} />} color="success-interactive" />
+          {(() => {
+            const template = triggerEvent ? catalogTemplateForEvent(triggerEvent) : undefined;
+            if (template) {
+              return (
+                <Text fontSize="caption" color="neutral-textLow">
+                  Envia o template aprovado pela Meta &quot;{template.label}&quot;. O
+                  conteúdo é fixo nesta versão — sem edição livre nem IA.
+                </Text>
+              );
+            }
+            return (
+              <Text fontSize="caption" color="neutral-textLow">
+                Este gatilho ainda não tem um template de WhatsApp automático
+                disponível. Escolha outro gatilho para usar WhatsApp aqui.
+              </Text>
+            );
+          })()}
         </Box>
       )}
 
