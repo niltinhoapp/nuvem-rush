@@ -3,8 +3,8 @@
 // anterior: nenhum sinal positivo em cache, seja qual for a idade, autoriza
 // um provider comercial sozinho. So (a) um probe feito AGORA, ou (b) um
 // sinal 2xx/402 desta MESMA execucao (escopado a esta store exata, dentro
-// de SAME_EXECUTION_SIGNAL_REUSE_MS), autorizam. Negativo em cache pode
-// continuar sendo usado como atalho (fail-closed nunca e risco).
+// de SAME_EXECUTION_SIGNAL_REUSE_MS), autorizam. Negativo em cache so pode
+// ser usado como atalho enquanto estiver dentro de COMMERCIAL_CACHE_TTL_MS.
 //
 // ZERO chamadas reais: fetchImpl fake injetado em dispatchJob/claimWhatsappTestAttempt.
 import assert from "node:assert/strict";
@@ -45,7 +45,7 @@ async function main() {
   const db = getFirestore();
   const { recordBillingAccessSignal, getStoreCommercialCache, ensureFreshCommercialAccess } =
     await import("../lib/billing/accessSignal.firestore");
-  const { SAME_EXECUTION_SIGNAL_REUSE_MS } = await import("../lib/billing/policy");
+  const { COMMERCIAL_CACHE_TTL_MS, SAME_EXECUTION_SIGNAL_REUSE_MS } = await import("../lib/billing/policy");
   const { dispatchJob } = await import("../lib/dispatch");
   const { claimWhatsappTestAttempt } = await import("../lib/whatsapp/testRateLimit.firestore");
 
@@ -59,6 +59,7 @@ async function main() {
   const stores = [
     "probe-a", "probe-b", "probe-c", "probe-d", "probe-e", "probe-f", "probe-g",
     "probe-h", "probe-i", "probe-j", "probe-k-a", "probe-k-b", "probe-wa", "probe-m", "probe-m-expired",
+    "probe-neg-fresh", "probe-neg-active", "probe-neg-blocked", "probe-neg-timeout", "probe-neg-500",
   ];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
 
@@ -94,6 +95,58 @@ async function main() {
   // arquivo, quebrando cenarios que dependem de um sinal "antigo mas ainda
   // dentro do TTL de 26h" (ver ensureFreshCommercialAccess/claimJobForDispatch).
   const now = Date.now();
+
+  // Cache NEGATIVO fresco continua sendo um atalho: bloqueia sem probe.
+  await seedStore("probe-neg-fresh");
+  await recordBillingAccessSignal("probe-neg-fresh", true, now - 1000);
+  const negFreshCalls: ProbeCall[] = [];
+  const negFreshState = await ensureFreshCommercialAccess(
+    "probe-neg-fresh", "fake-token", now, fakeFetch("active", negFreshCalls),
+  );
+  check("cache negativo fresco bloqueia sem probe desnecessaria",
+    negFreshState === "commercial_access_blocked" && negFreshCalls.length === 0);
+
+  // Cache NEGATIVO expirado nao perpetua o bloqueio: probe 200 recupera e
+  // atualiza a cache para acesso concedido.
+  await seedStore("probe-neg-active");
+  await recordBillingAccessSignal("probe-neg-active", true, now - COMMERCIAL_CACHE_TTL_MS - 1);
+  const negActiveCalls: ProbeCall[] = [];
+  const negActiveState = await ensureFreshCommercialAccess(
+    "probe-neg-active", "fake-token", now, fakeFetch("active", negActiveCalls),
+  );
+  const negActiveCache = await getStoreCommercialCache("probe-neg-active");
+  check("cache negativo expirado + probe 200 recupera acesso e atualiza cache",
+    negActiveState === "commercial_access_active" && negActiveCalls.length === 1
+      && negActiveCache?.billingBlocked === false && negActiveCache.commercialSyncedAt === now);
+
+  // Cache NEGATIVO expirado + 402 permanece bloqueado e renova timestamp.
+  await seedStore("probe-neg-blocked");
+  await recordBillingAccessSignal("probe-neg-blocked", true, now - COMMERCIAL_CACHE_TTL_MS - 1);
+  const negBlockedCalls: ProbeCall[] = [];
+  const negBlockedState = await ensureFreshCommercialAccess(
+    "probe-neg-blocked", "fake-token", now, fakeFetch("blocked", negBlockedCalls),
+  );
+  const negBlockedCache = await getStoreCommercialCache("probe-neg-blocked");
+  check("cache negativo expirado + probe 402 mantem bloqueio e renova cache",
+    negBlockedState === "commercial_access_blocked" && negBlockedCalls.length === 1
+      && negBlockedCache?.billingBlocked === true && negBlockedCache.commercialSyncedAt === now);
+
+  // Falhas ambiguas depois do cache NEGATIVO expirar seguem fail-closed e
+  // nao renovam cache com um estado inventado.
+  for (const [storeId, mode] of [
+    ["probe-neg-timeout", "timeout"],
+    ["probe-neg-500", "http_500"],
+  ] as const) {
+    const staleSyncedAt = now - COMMERCIAL_CACHE_TTL_MS - 1;
+    await seedStore(storeId);
+    await recordBillingAccessSignal(storeId, true, staleSyncedAt);
+    const calls: ProbeCall[] = [];
+    const state = await ensureFreshCommercialAccess(storeId, "fake-token", now, fakeFetch(mode, calls));
+    const cache = await getStoreCommercialCache(storeId);
+    check(`cache negativo expirado + ${mode} => billing_unknown / provider 0`,
+      state === "billing_unknown" && calls.length >= 1
+        && cache?.billingBlocked === true && cache.commercialSyncedAt === staleSyncedAt);
+  }
 
   // A: 200 de 1s atras em cache + probe atual 402 => provider 0.
   await seedStore("probe-a");

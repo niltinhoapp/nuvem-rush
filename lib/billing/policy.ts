@@ -49,9 +49,10 @@ export type CommercialState = "commercial_access_active" | "commercial_access_bl
 // um positivo em cache (mesmo recente) nao e prova suficiente para gastar um
 // provider real — so um probe feito NA MESMA execucao (ou uma resposta 2xx
 // genuina obtida na mesma execucao, com vinculo explicito de store/execucao)
-// autoriza. Um NEGATIVO em cache, por outro lado, pode continuar sendo usado
-// como atalho seguro (bloquear a mais e fail-closed, nunca um risco). Ver
-// ensureFreshCommercialAccess em accessSignal.firestore.ts.
+// autoriza. Um NEGATIVO em cache, por outro lado, pode ser usado como atalho
+// seguro somente dentro deste TTL; depois disso, uma nova probe real permite
+// detectar recuperacao comercial. Ver ensureFreshCommercialAccess em
+// accessSignal.firestore.ts.
 export const COMMERCIAL_CACHE_TTL_MS = 26 * 60 * 60 * 1000;
 
 // Janela para reaproveitar um sinal 2xx/402 OBTIDO NA MESMA EXECUCAO

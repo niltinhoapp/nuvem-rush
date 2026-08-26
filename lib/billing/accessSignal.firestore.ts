@@ -10,6 +10,7 @@ import { db, storeRef } from "@/lib/firebase/admin";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import { NuvemshopClient, NuvemshopApiError } from "@/lib/nuvemshop/client";
 import {
+  COMMERCIAL_CACHE_TTL_MS,
   SAME_EXECUTION_SIGNAL_REUSE_MS,
   type StoreCommercialCache,
   type CommercialState,
@@ -81,9 +82,9 @@ export async function getStoreCommercialCache(storeId: string): Promise<StoreCom
 //      barato ja usado neste repo para outros fins, com o access_token da
 //      propria loja).
 // Um sinal NEGATIVO em cache (billingBlocked=true), por outro lado, PODE ser
-// reaproveitado independente da idade — bloquear a mais e fail-closed, nunca
-// um risco de conceder acesso indevido, e evita gastar probes/rate-limit da
-// Nuvemshop numa loja que ja sabemos estar bloqueada.
+// reaproveitado enquanto estiver dentro de COMMERCIAL_CACHE_TTL_MS — evita
+// probes desnecessarios sem manter bloqueada indefinidamente uma loja que
+// recuperou o acesso comercial sem webhook/evento intermediario.
 //
 // Contrato da resposta do probe (documentado, mesmo das outras chamadas
 // reais): 200 = acesso concedido agora; 402 = bloqueado (pagamento OU dias
@@ -111,9 +112,17 @@ export async function ensureFreshCommercialAccess(
     return sameExecutionSignal.result === "blocked" ? "commercial_access_blocked" : "commercial_access_active";
   }
 
-  // Negativo em cache: atalho seguro, sem probe (bloquear a mais e fail-closed).
+  // Negativo fresco em cache: atalho seguro, sem probe. Expirado, precisa de
+  // probe real para nao manter bloqueada indefinidamente uma loja recuperada.
   const cache = await getStoreCommercialCache(storeId);
-  if (cache?.billingBlocked === true) return "commercial_access_blocked";
+  if (
+    cache?.billingBlocked === true
+    && typeof cache.commercialSyncedAt === "number"
+    && Number.isFinite(cache.commercialSyncedAt)
+    && Number.isFinite(now)
+    && now - cache.commercialSyncedAt >= 0
+    && now - cache.commercialSyncedAt <= COMMERCIAL_CACHE_TTL_MS
+  ) return "commercial_access_blocked";
 
   // Positivo em cache (ou ausencia de cache) NUNCA autoriza sozinho — sempre
   // um probe fresco a partir daqui.
