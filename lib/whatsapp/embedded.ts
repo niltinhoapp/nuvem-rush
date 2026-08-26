@@ -205,8 +205,18 @@ export type CatalogTemplateOperations = {
   lookup: typeof getCatalogTemplateStatus;
 };
 
-// Cada criação é independente e sequencial. Falhas não autorizam envios:
-// ausência de status verificável é persistida como PENDING.
+export type CatalogTemplateProvisionOutcome = {
+  outcome: "created" | "existing_status_confirmed" | "unconfirmed";
+  template?: WhatsappCatalogTemplate;
+};
+
+export type CatalogTemplateProvision = Record<
+  TemplateCatalogKey,
+  CatalogTemplateProvisionOutcome
+>;
+
+// Cada criação é independente e sequencial. Falhas não autorizam envios e
+// tampouco autorizam sobrescrever o último estado confirmado em reconnect.
 export async function provisionCatalogTemplates(
   wabaId: string,
   token: string,
@@ -214,29 +224,44 @@ export async function provisionCatalogTemplates(
     create: createCatalogTemplate,
     lookup: getCatalogTemplateStatus,
   },
-): Promise<Partial<Record<TemplateCatalogKey, WhatsappCatalogTemplate>>> {
-  const templates: Partial<Record<TemplateCatalogKey, WhatsappCatalogTemplate>> = {};
+): Promise<CatalogTemplateProvision> {
+  const templates = {} as CatalogTemplateProvision;
   for (const key of WHATSAPP_TEMPLATE_CATALOG_KEYS) {
     const catalog = getCatalogTemplate(key);
     try {
       const created = await operations.create(wabaId, token, catalog);
-      let status = created.status;
-      if (created.alreadyExisted) {
+      if (created.created) {
+        templates[key] = {
+          outcome: "created",
+          template: {
+            name: catalog.name,
+            language: catalog.language,
+            status: "PENDING",
+            statusUpdatedAt: Date.now(),
+          },
+        };
+      } else if (created.alreadyExisted) {
         try {
-          status = await operations.lookup(wabaId, token, catalog);
+          const status = await operations.lookup(wabaId, token, catalog);
+          templates[key] = status
+            ? {
+              outcome: "existing_status_confirmed",
+              template: {
+                name: catalog.name,
+                language: catalog.language,
+                status,
+                statusUpdatedAt: Date.now(),
+              },
+            }
+            : { outcome: "unconfirmed" };
         } catch {
-          status = undefined;
+          templates[key] = { outcome: "unconfirmed" };
         }
+      } else {
+        templates[key] = { outcome: "unconfirmed" };
       }
-      templates[key] = {
-        name: catalog.name,
-        language: catalog.language,
-        status: status ?? "PENDING",
-        statusUpdatedAt: Date.now(),
-      };
     } catch {
-      // O restante do catálogo continua sendo provisionado; o item ausente
-      // não é gravado e, portanto, não pode ser usado comercialmente.
+      templates[key] = { outcome: "unconfirmed" };
     }
   }
   return templates;

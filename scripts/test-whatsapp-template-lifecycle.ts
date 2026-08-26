@@ -7,6 +7,7 @@ import {
   getCatalogTemplate,
 } from "../lib/whatsapp/catalog";
 import { provisionCatalogTemplates } from "../lib/whatsapp/embedded";
+import { mergeConfirmedCatalogTemplates } from "../lib/whatsapp/connectMerge";
 import {
   TEMPLATE_NOT_APPROVED_ERROR,
   assertCommercialTemplateApproved,
@@ -24,6 +25,7 @@ import { sendApprovedCatalogTemplate } from "../lib/whatsapp/templateProvider";
 import { isTransient } from "../lib/dispatch/retry";
 import type { TemplateCatalogKey } from "../lib/whatsapp/catalog";
 import type { WhatsappCatalogTemplate } from "../types";
+import type { CatalogTemplateProvision } from "../lib/whatsapp/embedded";
 
 const keys = ["carrinho_abandonado", "pedido_pagamento_confirmado", "pedido_enviado_rastreio", "pos_venda_agradecimento"] as const;
 const approved = Object.fromEntries(keys.map((key) => [key, {
@@ -35,6 +37,10 @@ const change = (event: string, name = "pedido_pagamento_confirmado", language = 
   field: "message_template_status_update",
   value: { event, message_template_name: name, message_template_language: language },
 });
+
+function provision(overrides: Partial<CatalogTemplateProvision>): CatalogTemplateProvision {
+  return Object.fromEntries(keys.map((key) => [key, overrides[key] ?? { outcome: "unconfirmed" }])) as CatalogTemplateProvision;
+}
 
 async function main() {
   // A / AE / AF: catálogo canônico, com classificação e cópia exata.
@@ -57,7 +63,7 @@ async function main() {
   });
   assert.deepEqual(calls, keys.map((key) => `create:${key}`));
   assert.deepEqual(Object.keys(created), keys);
-  assert.ok(Object.values(created).every((template) => template?.status === "PENDING"));
+  assert.ok(Object.values(created).every((result) => result.outcome === "created" && result.template?.status === "PENDING"));
   const partial = await provisionCatalogTemplates("waba", "token", {
     create: async (_waba, _token, template) => {
       if (template.key === "pedido_pagamento_confirmado") throw new Error("expected");
@@ -65,18 +71,47 @@ async function main() {
     },
     lookup: async () => "APPROVED",
   });
-  assert.equal(partial.pedido_pagamento_confirmado, undefined);
+  assert.equal(partial.pedido_pagamento_confirmado.outcome, "unconfirmed");
   const reconnect = await provisionCatalogTemplates("waba", "token", {
     create: async () => ({ created: false, alreadyExisted: true }),
     lookup: async (_waba, _token, template) => template.key === "pedido_enviado_rastreio" ? "APPROVED" : "REJECTED",
   });
-  assert.equal(reconnect.pedido_enviado_rastreio?.status, "APPROVED");
-  assert.equal(reconnect.carrinho_abandonado?.status, "REJECTED");
+  assert.equal(reconnect.pedido_enviado_rastreio.template?.status, "APPROVED");
+  assert.equal(reconnect.pedido_enviado_rastreio.outcome, "existing_status_confirmed");
+  assert.equal(reconnect.carrinho_abandonado.template?.status, "REJECTED");
   const lookupFailure = await provisionCatalogTemplates("waba", "token", {
     create: async () => ({ created: false, alreadyExisted: true }),
     lookup: async () => { throw new Error("lookup failed"); },
   });
-  assert.ok(Object.values(lookupFailure).every((template) => template?.status === "PENDING"));
+  assert.ok(Object.values(lookupFailure).every((result) => result.outcome === "unconfirmed" && !result.template));
+
+  // Reconexão P1: falha de create/lookup não altera estado previamente
+  // confirmado; somente uma leitura atual confirmada pode substituí-lo.
+  const persisted = {
+    ...approved,
+    pedido_enviado_rastreio: { ...approved.pedido_enviado_rastreio!, status: "APPROVED" as const },
+  };
+  const lookupFailed = mergeConfirmedCatalogTemplates({ existing: persisted, provision: provision({
+    carrinho_abandonado: { outcome: "existing_status_confirmed", template: { ...approved.carrinho_abandonado!, status: "PENDING" } },
+    pedido_pagamento_confirmado: { outcome: "existing_status_confirmed", template: { ...approved.pedido_pagamento_confirmado!, status: "REJECTED" } },
+    pedido_enviado_rastreio: { outcome: "unconfirmed" },
+  }) });
+  // A/B/F/I: falhas por já-existente+lookup e por criação não degradam o
+  // APPROVED; as demais chaves confirmadas convergem independentemente.
+  assert.equal(lookupFailed.pedido_enviado_rastreio?.status, "APPROVED");
+  assert.equal(lookupFailed.carrinho_abandonado?.status, "PENDING");
+  assert.equal(lookupFailed.pedido_pagamento_confirmado?.status, "REJECTED");
+  // C/D: REJECTED e PENDING atuais, quando confirmados, substituem APPROVED.
+  const confirmedReplacement = mergeConfirmedCatalogTemplates({ existing: approved, provision: provision({
+    carrinho_abandonado: { outcome: "existing_status_confirmed", template: { ...approved.carrinho_abandonado!, status: "REJECTED" } },
+    pedido_pagamento_confirmado: { outcome: "existing_status_confirmed", template: { ...approved.pedido_pagamento_confirmado!, status: "PENDING" } },
+  }) });
+  assert.equal(confirmedReplacement.carrinho_abandonado?.status, "REJECTED");
+  assert.equal(confirmedReplacement.pedido_pagamento_confirmado?.status, "PENDING");
+  // E/G: uma chave sem estado anterior fica ausente e chaves fora do catálogo
+  // não são descartadas por uma falha de outra chave.
+  const absent = mergeConfirmedCatalogTemplates({ existing: {}, provision: provision({ pos_venda_agradecimento: { outcome: "unconfirmed" } }) });
+  assert.equal(absent.pos_venda_agradecimento, undefined);
 
   // G-H: shim legado é somente de leitura e limitado ao pós-venda canônico.
   const legacy = legacyPostSaleTemplate({ wabaId: "w", templateName: "pos_venda_agradecimento", templateLang: "pt_BR", templateStatus: "APPROVED" });

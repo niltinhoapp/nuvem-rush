@@ -6,7 +6,7 @@
 // GET /api/whatsapp/connect -> status da conexao (para a UI).
 import { NextRequest, NextResponse } from "next/server";
 import { resolveStoreId } from "@/lib/auth/session";
-import { db, storeRef } from "@/lib/firebase/admin";
+import { storeRef } from "@/lib/firebase/admin";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
   exchangeCodeForToken,
@@ -15,8 +15,9 @@ import {
   provisionCatalogTemplates,
 } from "@/lib/whatsapp/embedded";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS } from "@/lib/whatsapp/catalog";
+import { persistWhatsappConnection } from "@/lib/whatsapp/connectPersistence";
 import { storedCatalogTemplate } from "@/lib/whatsapp/templateStatus";
-import type { Store, StoreWhatsapp } from "@/types";
+import type { Store } from "@/types";
 
 export async function GET(req: NextRequest) {
   const storeId = resolveStoreId(req);
@@ -80,27 +81,16 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Catálogo fechado, criado sequencialmente na WABA do lojista. Uma
-    // falha isolada não impede os demais itens e nunca vira APPROVED por
-    // inferência; item sem leitura confiável fica PENDING.
-    const templates = await provisionCatalogTemplates(body.wabaId, accessToken);
-
-    const whatsapp: StoreWhatsapp = {
+    // 3. Catálogo fechado, criado sequencialmente na WABA do lojista. Um
+    // resultado sem estado confirmado da Meta não pode apagar nem degradar
+    // um template já persistido nesta mesma WABA.
+    const provision = await provisionCatalogTemplates(body.wabaId, accessToken);
+    const templates = await persistWhatsappConnection({
+      storeId,
       wabaId: body.wabaId,
       phoneNumberId: body.phoneNumberId,
-      accessToken, // TODO: criptografar em repouso (KMS)
-      status: "connected",
-      ...(Object.keys(templates).length > 0 ? { templates } : {}),
-      connectedAt: Date.now(),
-      tokenRefreshedAt: Date.now(),
-    };
-    await db.runTransaction(async (tx) => {
-      const ref = storeRef(storeId);
-      const current = await tx.get(ref);
-      if (!isStoreCommerciallyActive(current.data()?.status)) {
-        throw new Error("store_inactive");
-      }
-      tx.update(ref, { whatsapp });
+      accessToken,
+      provision,
     });
 
     return NextResponse.json({

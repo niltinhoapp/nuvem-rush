@@ -3,6 +3,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS, getCatalogTemplate, type TemplateCatalogKey } from "../lib/whatsapp/catalog";
 import { parseMetaTemplateStatusUpdate } from "../lib/whatsapp/templateStatus";
+import type { CatalogTemplateProvision, CatalogTemplateProvisionOutcome } from "../lib/whatsapp/embedded";
 
 if (!process.env.FIRESTORE_EMULATOR_HOST) throw new Error("FIRESTORE_EMULATOR_HOST obrigatorio");
 initializeApp({ projectId: process.env.GCLOUD_PROJECT ?? "demo-nuvem-rush-whatsapp-template" });
@@ -12,6 +13,12 @@ function templates(status = "PENDING", updatedAt = 0) {
   return Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((templateKey) => [templateKey, {
     name: key(templateKey).name, language: key(templateKey).language, status, statusUpdatedAt: updatedAt,
   }]));
+}
+function provision(overrides: Partial<Record<TemplateCatalogKey, CatalogTemplateProvisionOutcome>>): CatalogTemplateProvision {
+  return Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((templateKey) => [
+    templateKey,
+    overrides[templateKey] ?? { outcome: "unconfirmed" },
+  ])) as CatalogTemplateProvision;
 }
 function event(wabaId: string, status: string, seconds: number, templateKey: TemplateCatalogKey, language = "pt_BR") {
   const parsed = parseMetaTemplateStatusUpdate({ id: wabaId, time: seconds }, {
@@ -27,7 +34,8 @@ async function main() {
   // O repositório inicializa o Admin SDK de produção quando não há app. A app
   // demo precisa existir antes do import para o teste nunca tocar credenciais.
   const { updateTemplateStatus } = await import("../lib/whatsapp/templateStatus.firestore");
-  const stores = ["ambiguous-a", "ambiguous-b", "tenant-a", "tenant-b", "stale-a", "parallel-a", "duplicate-a", "legacy-a", "inactive-a"];
+  const { persistWhatsappConnection } = await import("../lib/whatsapp/connectPersistence");
+  const stores = ["ambiguous-a", "ambiguous-b", "tenant-a", "tenant-b", "stale-a", "parallel-a", "duplicate-a", "legacy-a", "inactive-a", "reconnect-p1", "reconnect-legacy", "reconnect-empty"];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
   async function seed(id: string, wabaId: string, options: { status?: string; legacy?: boolean; updatedAt?: number } = {}) {
     const post = key("pos_venda_agradecimento");
@@ -93,12 +101,64 @@ async function main() {
   const legacy = await whatsapp("legacy-a");
   assert.equal(legacy.templateStatus, "APPROVED"); assert.equal(legacy.templates, undefined);
 
-  // 9/10: store inativa não é mutada.
+  // 9/10: store inativa e WABA ausente não são mutadas.
   await seed("inactive-a", "waba-inactive", { status: "uninstalled" });
   assert.equal(await updateTemplateStatus(event("waba-inactive", "APPROVED", 200, "pedido_pagamento_confirmado")), "ignored_store_or_template_mismatch");
-
-  // 10/10: WABA ausente é ignorada sem escrita.
   assert.equal(await updateTemplateStatus(event("missing", "APPROVED", 200, "pedido_pagamento_confirmado")), "ignored_missing_or_ambiguous_waba");
+
+  // 10/10: reconnect é transacional e não deixa uma falha de observação
+  // degradar APPROVED. Estados confirmados atuais, inclusive PENDING e
+  // REJECTED, são a única autoridade para substituir o estado persistido.
+  await seed("reconnect-p1", "waba-reconnect");
+  await db.doc("stores/reconnect-p1").update({
+    "whatsapp.templates.pedido_enviado_rastreio.status": "APPROVED",
+    "whatsapp.templates.pos_venda_agradecimento.status": "APPROVED",
+    "whatsapp.templates.unrelated": { marker: "keep" },
+    "whatsapp.lastRefreshError": "keep",
+    "whatsapp.lastRefreshAttempt": 7,
+    "whatsapp.refreshFailCount": 3,
+  });
+  await persistWhatsappConnection({
+    storeId: "reconnect-p1", wabaId: "waba-reconnect", phoneNumberId: "phone-new", accessToken: "token-new", now: 500,
+    provision: provision({
+      carrinho_abandonado: { outcome: "existing_status_confirmed", template: { ...key("carrinho_abandonado"), status: "PENDING", statusUpdatedAt: 500 } },
+      pedido_pagamento_confirmado: { outcome: "existing_status_confirmed", template: { ...key("pedido_pagamento_confirmado"), status: "REJECTED", statusUpdatedAt: 500 } },
+      pedido_enviado_rastreio: { outcome: "unconfirmed" },
+      pos_venda_agradecimento: { outcome: "existing_status_confirmed", template: { ...key("pos_venda_agradecimento"), status: "APPROVED", statusUpdatedAt: 500 } },
+    }),
+  });
+  const reconnectP1 = await whatsapp("reconnect-p1");
+  assert.equal(reconnectP1.templates.pedido_enviado_rastreio.status, "APPROVED");
+  assert.equal(reconnectP1.templates.carrinho_abandonado.status, "PENDING");
+  assert.equal(reconnectP1.templates.pedido_pagamento_confirmado.status, "REJECTED");
+  assert.equal(reconnectP1.templates.pos_venda_agradecimento.status, "APPROVED");
+  assert.equal(reconnectP1.templates.unrelated.marker, "keep");
+  assert.equal(reconnectP1.lastRefreshError, "keep");
+  assert.equal(reconnectP1.lastRefreshAttempt, 7);
+  assert.equal(reconnectP1.refreshFailCount, 3);
+
+  // Documento sem template e falha no provisionamento fica sem template.
+  await db.doc("stores/reconnect-empty").set({
+    status: "active",
+    whatsapp: { wabaId: "waba-empty", phoneNumberId: "phone", accessToken: "fixture", status: "connected", connectedAt: 1 },
+  });
+  await persistWhatsappConnection({
+    storeId: "reconnect-empty", wabaId: "waba-empty", phoneNumberId: "phone", accessToken: "token", now: 600,
+    provision: provision({}),
+  });
+  assert.equal((await whatsapp("reconnect-empty")).templates, undefined);
+
+  // Legado não é migrado e seus campos continuam íntegros durante reconnect.
+  await seed("reconnect-legacy", "waba-legacy-reconnect", { legacy: true });
+  await persistWhatsappConnection({
+    storeId: "reconnect-legacy", wabaId: "waba-legacy-reconnect", phoneNumberId: "phone", accessToken: "token", now: 700,
+    provision: provision({ pos_venda_agradecimento: { outcome: "existing_status_confirmed", template: { ...key("pos_venda_agradecimento"), status: "APPROVED", statusUpdatedAt: 700 } } }),
+  });
+  const reconnectLegacy = await whatsapp("reconnect-legacy");
+  assert.equal(reconnectLegacy.templates, undefined);
+  assert.equal(reconnectLegacy.templateName, key("pos_venda_agradecimento").name);
+  assert.equal(reconnectLegacy.templateLang, "pt_BR");
+  assert.equal(reconnectLegacy.templateStatus, "PENDING");
   console.log("WhatsApp multi-template Firestore Emulator: 10/10 OK");
 }
 
