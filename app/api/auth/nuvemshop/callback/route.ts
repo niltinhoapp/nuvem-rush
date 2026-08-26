@@ -9,7 +9,7 @@ import {
   buildStoreInstallData,
   isFirstCommercialInstall,
 } from "@/lib/nuvemshop/store-install";
-import { ensureTrialStarted } from "@/lib/billing/entitlement.firestore";
+import { syncCommercialState } from "@/lib/billing/sync.firestore";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -40,11 +40,12 @@ export async function GET(req: NextRequest) {
       { merge: !firstCommercialInstall },
     );
 
-    // Trial anti-reset: concede o unico trial da loja na primeira vez (nunca
-    // de novo). Roda DEPOIS do set acima (que pode substituir o doc raiz
-    // inteiro num reinstall pos-redact) para a copia sincronizada no doc raiz
-    // nao ser apagada em seguida. Idempotente — reinstalar nunca reinicia.
-    await ensureTrialStarted(storeId);
+    // Fonte de verdade = Billing da Nuvemshop. Roda DEPOIS do set acima (que
+    // pode substituir o doc raiz inteiro num reinstall pos-redact) para a
+    // cache comercial nao ser apagada em seguida. NUNCA assume trial novo so
+    // porque o doc acabou de ser (re)criado — resolve consultando a
+    // Nuvemshop; so cai no fallback local se ela confirmar not_found.
+    await syncCommercialState(storeId);
 
     // Registra os webhooks obrigatorios apontando para o nosso receiver.
     const client = new NuvemshopClient(storeId, token.access_token);

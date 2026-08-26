@@ -18,6 +18,7 @@ import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
 import { templateStatusLabel } from "@/lib/whatsapp/templateStatus";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS, getCatalogTemplate, type TemplateCatalogKey } from "@/lib/whatsapp/catalog";
 import type { CommercialState } from "@/lib/billing/policy";
+import { PLANS } from "@/lib/plans";
 import type { Flow } from "@/types";
 
 type ConnectionStatus = "loading" | "ready" | "error";
@@ -247,7 +248,9 @@ function BillingStatusCard({
       case "paid_active":
         return {
           title: "Plano ativo",
-          description: "Sua assinatura está em dia.",
+          // Preco vem so de PLANS.essencial (fonte real do repo) — nunca um
+          // valor livre, para nunca mostrar um preco que nao existe de fato.
+          description: `Sua assinatura do plano ${PLANS.essencial.label} (R$ ${PLANS.essencial.priceBRL.toFixed(2).replace(".", ",")}/mês) está em dia.`,
           appearance: "success" as const,
         };
       case "paid_inactive":
@@ -255,6 +258,12 @@ function BillingStatusCard({
           title: "Assinatura inativa",
           description: "Seu período grátis já foi usado e a assinatura não está ativa. Automações estão pausadas.",
           appearance: "danger" as const,
+        };
+      case "billing_unknown":
+        return {
+          title: "Não foi possível confirmar seu plano agora",
+          description: "Estamos com uma instabilidade temporária para confirmar sua assinatura. Isso não afeta automações já em andamento; tente novamente em alguns minutos.",
+          appearance: "warning" as const,
         };
       case "trial_expired":
       default:

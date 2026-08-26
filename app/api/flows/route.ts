@@ -3,8 +3,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveStoreId } from "@/lib/auth/session";
 import { listFlows, saveFlow } from "@/lib/flows/repo";
-import { getStoreCommercialInput } from "@/lib/billing/entitlement.firestore";
-import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
+import { getStoreCommercialCache } from "@/lib/billing/sync.firestore";
+import { isCommercialAccessGranted, resolveStoreCommercialState } from "@/lib/billing/policy";
 
 export async function GET(req: NextRequest) {
   const storeId = resolveStoreId(req);
@@ -27,8 +27,8 @@ export async function POST(req: NextRequest) {
   // defesa em profundidade: o dispatch tambem revalida no envio (o guard
   // real), este bloqueio so evita ativar algo que ja se sabe bloqueado.
   if ((body.status ?? "draft") === "active") {
-    const commercialInput = await getStoreCommercialInput(storeId);
-    const commercial = commercialInput ? resolveCommercialState(commercialInput, Date.now()) : "trial_expired";
+    const commercialCache = await getStoreCommercialCache(storeId);
+    const commercial = commercialCache ? resolveStoreCommercialState(commercialCache, Date.now()) : "billing_unknown";
     if (!isCommercialAccessGranted(commercial)) {
       return NextResponse.json(
         { error: "periodo gratis encerrado ou assinatura inativa", commercial },

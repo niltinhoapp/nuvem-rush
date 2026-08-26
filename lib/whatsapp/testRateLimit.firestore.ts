@@ -1,7 +1,7 @@
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
-import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
+import { isCommercialAccessGranted, resolveStoreCommercialState } from "@/lib/billing/policy";
 import { decideWhatsappTestAttempt, type WhatsappTestLimitState } from "./testRateLimit";
 
 const LIMIT_DOC_ID = "global";
@@ -27,7 +27,7 @@ export async function claimWhatsappTestAttempt(
     if (!store || !isStoreCommerciallyActive(store.status)) {
       return { ok: false, status: 409, reason: "store_inactive" };
     }
-    if (!isCommercialAccessGranted(resolveCommercialState(store, now))) {
+    if (!isCommercialAccessGranted(resolveStoreCommercialState(store, now))) {
       return { ok: false, status: 402, reason: "commercial_inactive" };
     }
     const decision = decideWhatsappTestAttempt(

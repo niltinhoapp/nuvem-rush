@@ -20,7 +20,7 @@ async function main() {
   assert.match(route, /resolveAuthenticatedStoreId\(req\)/);
   assert.doesNotMatch(route, /resolveStoreId\(req\)/);
   assert.match(route, /claimWhatsappTestAttempt/);
-  assert.match(limiter, /resolveCommercialState/);
+  assert.match(limiter, /resolveStoreCommercialState/);
   assert.match(limiter, /commercial_inactive/);
   assert.doesNotMatch(route, /detail:\s*String\(err\)/);
   assert.doesNotMatch(limiter, /\bto\b|message|accessToken|providerResponse/);

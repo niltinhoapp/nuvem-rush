@@ -9,7 +9,7 @@ import { enrollmentKey, jobKey, planEnrollment } from "@/lib/rules/enrollmentKey
 import type { Cart, Contact, Flow, Order, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
-import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
+import { isCommercialAccessGranted, resolveStoreCommercialState } from "@/lib/billing/policy";
 
 // Cria o enrollment e agenda os jobs de um flow que casou — IDEMPOTENTE.
 // `origin` liga o enrollment ao pedido ou ao carrinho de origem. A identidade é
@@ -40,7 +40,7 @@ async function createEnrollmentWithJobs(
 
     if (!isStoreCommerciallyActive(storeSnap.data()?.status)) return false;
     const store = storeSnap.data() as Store;
-    if (!isCommercialAccessGranted(resolveCommercialState(store, Date.now()))) return false;
+    if (!isCommercialAccessGranted(resolveStoreCommercialState(store, Date.now()))) return false;
 
     const plan = planEnrollment(enrollSnap.exists, jobSnaps.map((s) => s.exists));
 

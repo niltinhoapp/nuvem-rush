@@ -20,6 +20,7 @@ import {
   isOrderWebhookEvent,
 } from "@/lib/webhooks/inbox";
 import { firestoreWebhookInboxRepository } from "@/lib/webhooks/inbox.firestore";
+import { syncCommercialState, setBillingSuspended } from "@/lib/billing/sync.firestore";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -93,6 +94,32 @@ export async function POST(req: NextRequest) {
 
     /* app/uninstalled continua no fluxo validado acima. Data request compila
        somente em memoria; delivery ocorre sob demanda no dashboard Nexo. */
+
+    // ---- Billing V1 (Nuvemshop nativo) ----
+    // subscription/updated: payload e so um SINAL (concept_code/service_id/
+    // event_launch_ts) — nunca a fonte do estado. Sempre rebusca a Nuvemshop.
+    // Naturalmente idempotente: reprocessar o mesmo evento so refaz a mesma
+    // consulta e grava o mesmo resultado (sem ledger de dedup necessario).
+    // store_id ja foi validado por parseSignedWebhookRequest acima; loja
+    // inexistente/inativa e tratada dentro do proprio syncCommercialState
+    // (fail-closed, sem side-effect fora do tenant).
+    case "subscription/updated":
+      await syncCommercialState(storeId);
+      break;
+
+    // app/suspended e app/resumed: sinal DOCUMENTADO de suspensao por falta de
+    // pagamento (nao dispara para o esgotamento dos dias gratis). So altera a
+    // flag local; o proximo sync (aqui mesmo, em seguida) recalcula o estado
+    // combinando isso com o resultado real da Nuvemshop.
+    case "app/suspended":
+      await setBillingSuspended(storeId, true);
+      await syncCommercialState(storeId);
+      break;
+
+    case "app/resumed":
+      await setBillingSuspended(storeId, false);
+      await syncCommercialState(storeId);
+      break;
 
     // ---- Pedidos -> motor de regras ----
     case "order/paid":

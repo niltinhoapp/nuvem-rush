@@ -2,8 +2,8 @@
 // So leitura; nunca inicia um trial (isso so acontece no callback OAuth).
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuthenticatedStoreId } from "@/lib/auth/session";
-import { getStoreCommercialInput } from "@/lib/billing/entitlement.firestore";
-import { resolveCommercialState, trialDaysRemaining } from "@/lib/billing/policy";
+import { getStoreCommercialCache } from "@/lib/billing/sync.firestore";
+import { resolveStoreCommercialState, trialDaysRemaining } from "@/lib/billing/policy";
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store, max-age=0",
@@ -16,13 +16,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "nao autorizado" }, { status: 401, headers: NO_STORE_HEADERS });
   }
 
-  const input = await getStoreCommercialInput(storeId);
+  const input = await getStoreCommercialCache(storeId);
   if (!input) {
     return NextResponse.json({ error: "loja nao encontrada" }, { status: 404, headers: NO_STORE_HEADERS });
   }
 
   const now = Date.now();
-  const state = resolveCommercialState(input, now);
+  const state = resolveStoreCommercialState(input, now);
   return NextResponse.json(
     {
       state,

@@ -10,7 +10,7 @@ import { canClaim, isOrphanProcessing } from "@/lib/dispatch/claim";
 import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
-import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
+import { isCommercialAccessGranted, resolveStoreCommercialState } from "@/lib/billing/policy";
 import { runWithFinalCommercialGuard } from "@/lib/dispatch/finalGuard";
 import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 import {
@@ -62,7 +62,7 @@ export async function claimJobForDispatch(
     // o provider aqui, no mesmo ponto que ja bloqueia loja inativa — nao
     // depende da UI. Cancelamento terminal (nao agenda retry): um bloqueio
     // comercial permanente nao deve gerar tempestade de retries.
-    const commercial = resolveCommercialState(storeSnap.data() as Store, now);
+    const commercial = resolveStoreCommercialState(storeSnap.data() as Store, now);
     if (!isCommercialAccessGranted(commercial)) {
       if (j.status === "scheduled") {
         tx.update(jobRef, { status: "cancelled", cancelReason: "trial_expired" });
@@ -196,7 +196,7 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
         // Revalida com relogio server-side depois das leituras finais. Nao ha
         // await entre esta decisao e a invocacao do provider.
         commercialAccess: !!preSendStoreData && isCommercialAccessGranted(
-          resolveCommercialState(preSendStoreData, Date.now()),
+          resolveStoreCommercialState(preSendStoreData, Date.now()),
         ),
         jobProcessing: hasMatchingQuotaReservation(
           preSendStoreData,

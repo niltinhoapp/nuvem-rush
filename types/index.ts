@@ -3,6 +3,12 @@ import type { TemplateCatalogKey } from "@/lib/whatsapp/catalog";
 
 export type Plan = "essencial" | "crescimento" | "turbo";
 
+// V1 (Billing nativo Nuvemshop): unico plano selecionavel. crescimento/turbo
+// sao LEGADO — lojas que ja os tem preservam o dado historico, mas nenhum
+// fluxo novo os oferece nem os concede. Ver lib/billing/policy.ts.
+export const V1_AVAILABLE_PLAN: Plan = "essencial";
+export const LEGACY_PLAN_IDS: readonly Plan[] = ["crescimento", "turbo"];
+
 export interface Store {
   storeId: string; // = user_id retornado pela Nuvemshop
   ownerUid: string;
@@ -11,16 +17,25 @@ export interface Store {
   plan: Plan;
   status: "active" | "uninstalled" | "redacting" | "redacted";
   installedAt: number;
-  // Copia rapida (cache) do ledger de trial em `commercial_entitlements/{storeId}`
-  // — a fonte de verdade e o ledger, que sobrevive a store/redact. Esta copia
-  // e regravada a cada install/reinstall a partir do ledger (nunca inventada
-  // aqui) e serve so para evitar uma leitura extra no caminho quente do
-  // dispatch. Ver lib/billing/policy.ts.
+  // Cache OPERACIONAL do estado comercial, sincronizada a partir do Billing
+  // nativo da Nuvemshop (fonte de verdade) por lib/billing/sync.firestore.ts.
+  // NAO e mais um ledger perpetuo local — sujeita a TTL
+  // (policy.ts::COMMERCIAL_CACHE_TTL_MS); cache velha demais sem resync vira
+  // billing_unknown (fail-closed), nunca "herda" paid_active as cegas.
+  // trialEndsAt so e populado quando a Nuvemshop confirma que a loja nunca
+  // teve assinatura (fallback local — ver lib/billing/trialFallback.firestore.ts).
   trialStartedAt?: number;
   trialEndsAt?: number;
-  // Estado da assinatura paga (V1 = um unico plano pago). Ausente/undefined
-  // = nunca assinou. Nao ha integracao de pagamento real ainda: nada no repo
-  // seta "active" hoje (ver lib/billing/policy.ts e o relatorio da OS).
+  // Ultima vez que a cache acima foi sincronizada com sucesso contra a
+  // Nuvemshop. Ausente/velha demais => resolveStoreCommercialState trata
+  // como billing_unknown (ver policy.ts).
+  commercialSyncedAt?: number;
+  // Sinal do webhook documentado app/suspended (sem app/resumed desde entao).
+  // So se aplica quando ha assinatura encontrada na Nuvemshop.
+  billingSuspended?: boolean;
+  // Estado da assinatura paga (V1 = um unico plano pago), resolvido a partir
+  // do Billing nativo pelo sync — nunca setado por um fluxo de pagamento
+  // local (nao existe um aqui). Ver lib/billing/policy.ts.
   subscriptionStatus?: "active" | "inactive";
   // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
   // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).
