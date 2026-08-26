@@ -9,6 +9,7 @@ import {
   buildStoreInstallData,
   isFirstCommercialInstall,
 } from "@/lib/nuvemshop/store-install";
+import { ensureTrialStarted } from "@/lib/billing/entitlement.firestore";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -38,6 +39,12 @@ export async function GET(req: NextRequest) {
       // substitui somente o documento raiz; lgpd_suppressions permanece.
       { merge: !firstCommercialInstall },
     );
+
+    // Trial anti-reset: concede o unico trial da loja na primeira vez (nunca
+    // de novo). Roda DEPOIS do set acima (que pode substituir o doc raiz
+    // inteiro num reinstall pos-redact) para a copia sincronizada no doc raiz
+    // nao ser apagada em seguida. Idempotente — reinstalar nunca reinicia.
+    await ensureTrialStarted(storeId);
 
     // Registra os webhooks obrigatorios apontando para o nosso receiver.
     const client = new NuvemshopClient(storeId, token.access_token);

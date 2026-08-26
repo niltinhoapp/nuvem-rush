@@ -11,6 +11,17 @@ export interface Store {
   plan: Plan;
   status: "active" | "uninstalled" | "redacting" | "redacted";
   installedAt: number;
+  // Copia rapida (cache) do ledger de trial em `commercial_entitlements/{storeId}`
+  // — a fonte de verdade e o ledger, que sobrevive a store/redact. Esta copia
+  // e regravada a cada install/reinstall a partir do ledger (nunca inventada
+  // aqui) e serve so para evitar uma leitura extra no caminho quente do
+  // dispatch. Ver lib/billing/policy.ts.
+  trialStartedAt?: number;
+  trialEndsAt?: number;
+  // Estado da assinatura paga (V1 = um unico plano pago). Ausente/undefined
+  // = nunca assinou. Nao ha integracao de pagamento real ainda: nada no repo
+  // seta "active" hoje (ver lib/billing/policy.ts e o relatorio da OS).
+  subscriptionStatus?: "active" | "inactive";
   // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
   // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).
   // NAO preenchidos no OAuth; populados sob demanda pelo cron de sinais.

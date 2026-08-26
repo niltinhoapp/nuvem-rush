@@ -10,6 +10,7 @@ import { canClaim, isOrphanProcessing } from "@/lib/dispatch/claim";
 import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
 import { runWithFinalCommercialGuard } from "@/lib/dispatch/finalGuard";
 import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 import {
@@ -56,6 +57,17 @@ export async function claimJobForDispatch(
         tx.update(jobRef, { status: "cancelled", cancelReason: "store_inactive" });
       }
       return { ok: false as const, reason: "loja inativa" };
+    }
+    // Gate comercial (Billing V1): trial vencido sem assinatura ativa bloqueia
+    // o provider aqui, no mesmo ponto que ja bloqueia loja inativa — nao
+    // depende da UI. Cancelamento terminal (nao agenda retry): um bloqueio
+    // comercial permanente nao deve gerar tempestade de retries.
+    const commercial = resolveCommercialState(storeSnap.data() as Store, now);
+    if (!isCommercialAccessGranted(commercial)) {
+      if (j.status === "scheduled") {
+        tx.update(jobRef, { status: "cancelled", cancelReason: "trial_expired" });
+      }
+      return { ok: false as const, reason: "trial expirado" };
     }
     if (!canClaim(j.status)) return { ok: false as const, reason: "ja processado" };
     const reservation = buildQuotaReservation(storeSnap.data() as Store, j, now);

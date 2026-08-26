@@ -17,6 +17,7 @@ import { ErrorBoundary } from "@tiendanube/nexo";
 import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
 import { templateStatusLabel } from "@/lib/whatsapp/templateStatus";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS, getCatalogTemplate, type TemplateCatalogKey } from "@/lib/whatsapp/catalog";
+import type { CommercialState } from "@/lib/billing/policy";
 import type { Flow } from "@/types";
 
 type ConnectionStatus = "loading" | "ready" | "error";
@@ -55,6 +56,9 @@ export default function DashboardPage() {
     sending: false,
     msg: "",
   });
+  const [billing, setBilling] = useState<
+    { state: CommercialState; trialEndsAt: number | null; trialDaysRemaining: number } | null
+  >(null);
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -73,6 +77,21 @@ export default function DashboardPage() {
         console.error("Falha ao carregar fluxos:", e);
         setFlowsFailed(true);
       });
+  };
+
+  const loadBillingStatus = () => {
+    sessionToken()
+      .then(async (token) => {
+        const r = await fetch("/api/billing/status", { headers: { Authorization: `Bearer ${token}` } });
+        if (!r.ok) throw new Error(`status ${r.status}`);
+        const data = await r.json();
+        setBilling({
+          state: data.state,
+          trialEndsAt: data.trialEndsAt ?? null,
+          trialDaysRemaining: data.trialDaysRemaining ?? 0,
+        });
+      })
+      .catch((e) => console.error("Falha ao checar status comercial:", e));
   };
 
   const loadWhatsappStatus = () => {
@@ -126,6 +145,7 @@ export default function DashboardPage() {
         setConnection("ready");
         loadFlows();
         loadWhatsappStatus();
+        loadBillingStatus();
       })
       .catch((e) => {
         console.error("Nexo falhou:", e);
@@ -136,6 +156,8 @@ export default function DashboardPage() {
   const content = (
     <Box padding="6" display="flex" flexDirection="column" gap="6">
       <PageHeader />
+
+      {connection === "ready" && billing && <BillingStatusCard billing={billing} />}
 
       {connection === "ready" && (
         <WhatsappStatusCard
@@ -199,6 +221,63 @@ function PageHeader() {
         <Text color="neutral-textLow">Automações de e-mail e WhatsApp para o pós-venda</Text>
       </Box>
     </Box>
+  );
+}
+
+// Card comercial (Billing V1): mostra o periodo gratis restante ou o estado
+// da assinatura. Sem preco fixo aqui de proposito — nao ha integracao de
+// pagamento ainda (ver relatorio da OS); so a mensagem de estado.
+function BillingStatusCard({
+  billing,
+}: {
+  billing: { state: CommercialState; trialEndsAt: number | null; trialDaysRemaining: number };
+}) {
+  const formattedEnd = billing.trialEndsAt
+    ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(new Date(billing.trialEndsAt))
+    : null;
+
+  const { title, description, appearance } = (() => {
+    switch (billing.state) {
+      case "trial_active":
+        return {
+          title: "Período grátis",
+          description: `${billing.trialDaysRemaining} dia(s) restante(s)${formattedEnd ? ` — termina em ${formattedEnd}` : ""}.`,
+          appearance: "success" as const,
+        };
+      case "paid_active":
+        return {
+          title: "Plano ativo",
+          description: "Sua assinatura está em dia.",
+          appearance: "success" as const,
+        };
+      case "paid_inactive":
+        return {
+          title: "Assinatura inativa",
+          description: "Seu período grátis já foi usado e a assinatura não está ativa. Automações estão pausadas.",
+          appearance: "danger" as const,
+        };
+      case "trial_expired":
+      default:
+        return {
+          title: "Seu período grátis terminou",
+          description: "Assine o plano para continuar enviando automações.",
+          appearance: "danger" as const,
+        };
+    }
+  })();
+
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" flexDirection="column" gap="1">
+            <Text fontWeight="bold">{title}</Text>
+            <Text fontSize="caption" color="neutral-textLow">{description}</Text>
+          </Box>
+          <Tag appearance={appearance}>{title}</Tag>
+        </Box>
+      </Card.Body>
+    </Card>
   );
 }
 
