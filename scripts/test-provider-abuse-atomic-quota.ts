@@ -20,10 +20,15 @@ async function main() {
   assert.match(route, /resolveAuthenticatedStoreId\(req\)/);
   assert.doesNotMatch(route, /resolveStoreId\(req\)/);
   assert.match(route, /claimWhatsappTestAttempt/);
-  assert.match(limiter, /resolveStoreCommercialState/);
+  assert.match(limiter, /ensureFreshCommercialAccess/);
   assert.match(limiter, /commercial_inactive/);
   assert.doesNotMatch(route, /detail:\s*String\(err\)/);
-  assert.doesNotMatch(limiter, /\bto\b|message|accessToken|providerResponse/);
+  assert.doesNotMatch(limiter, /\bto\b|message|providerResponse/);
+  // accessToken agora e legitimamente lido (para o probe GET /store da
+  // guarda de acesso comercial — ver ensureFreshCommercialAccess), mas
+  // NUNCA pode ser escrito num documento Firestore por este modulo.
+  assert.match(limiter, /accessToken/);
+  assert.doesNotMatch(limiter, /tx\.set\([^)]*accessToken/s);
 
   const now = Date.UTC(2026, 7, 25, 12, 0, 0);
   assert.equal(decideWhatsappTestAttempt(undefined, now).ok, true, "primeira tentativa aceita");

@@ -11,6 +11,7 @@ import { planRetry, MAX_ATTEMPTS } from "@/lib/dispatch/retry";
 import type { Job, Flow, Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import { isCommercialAccessGranted, resolveStoreCommercialState } from "@/lib/billing/policy";
+import { ensureFreshCommercialAccess } from "@/lib/billing/accessSignal.firestore";
 import { runWithFinalCommercialGuard } from "@/lib/dispatch/finalGuard";
 import { cancelJobAndReleaseQuota } from "@/lib/dispatch/cancel";
 import {
@@ -148,7 +149,13 @@ export async function finalizeClaimedDispatch(
   });
 }
 
-export async function dispatchJob(storeId: string, jobId: string): Promise<DispatchResult> {
+export async function dispatchJob(
+  storeId: string,
+  jobId: string,
+  // Injetavel so para teste (fake HTTP do probe da guarda final) — nunca
+  // chamado com a API real nesta OS.
+  fetchImpl: typeof fetch = fetch,
+): Promise<DispatchResult> {
   const jobRef = col(storeId, "jobs").doc(jobId);
   const claim = await claimJobForDispatch(storeId, jobId);
   if (!claim.ok) return { ok: true, status: "skipped", reason: claim.reason };
@@ -192,13 +199,16 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
         col(storeId, "enrollments").doc(job.enrollmentId).get(),
       ]);
       const preSendStoreData = preSendStore.data() as Store | undefined;
+      // Guarda final (ver lib/billing/policy.ts::FINAL_GUARD_FRESHNESS_MS):
+      // nunca autoriza so com a cache de 26h. Exige um sinal visto ha no
+      // maximo 5 min; sem isso, faz um probe minimo GET /store aqui mesmo,
+      // ainda dentro da fase de leitura (antes do zero-await ate o provider).
+      const commercialState = preSendStoreData?.accessToken
+        ? await ensureFreshCommercialAccess(storeId, preSendStoreData.accessToken, Date.now(), fetchImpl)
+        : "billing_unknown";
       return {
         storeActive: isStoreCommerciallyActive(preSendStoreData?.status),
-        // Revalida com relogio server-side depois das leituras finais. Nao ha
-        // await entre esta decisao e a invocacao do provider.
-        commercialAccess: !!preSendStoreData && isCommercialAccessGranted(
-          resolveStoreCommercialState(preSendStoreData, Date.now()),
-        ),
+        commercialAccess: isCommercialAccessGranted(commercialState),
         jobProcessing: hasMatchingQuotaReservation(
           preSendStoreData,
           preSendJob.data() as Job | undefined,

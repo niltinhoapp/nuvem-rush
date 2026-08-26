@@ -58,13 +58,17 @@ async function main() {
   };
 
   const stores = [
-    "billing-b", "billing-c", "billing-d", "billing-e", "billing-f",
+    "billing-a-redact", "billing-b", "billing-c", "billing-d", "billing-e", "billing-f",
     "billing-g-a", "billing-g-b", "billing-h", "billing-j",
     "billing-dispatch-blocked", "billing-dispatch-active", "billing-stale",
     "billing-lifecycle-inactive", "billing-timestamp-order",
   ];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
-  await db.doc(`lgpd_store_redactions/redact-billing-a`).delete().catch(() => {});
+  const { lgpdRequestId } = await import("../lib/lgpd/model");
+  for (const redactedId of ["billing-a-redact", "billing-j"]) {
+    await db.doc(`lgpd_store_redactions/${lgpdRequestId({ event: "store/redact", store_id: redactedId })}`)
+      .delete().catch(() => {});
+  }
 
   async function seedStore(storeId: string, extra: Record<string, unknown> = {}) {
     await db.doc(`stores/${storeId}`).set({
@@ -110,7 +114,7 @@ async function main() {
   await syncOrder("billing-a-redact", "fake-token", "1", "paid", { fetchImpl: fakeFetch("found") });
   const bState = resolveStoreCommercialState((await getStoreCommercialCache("billing-a-redact"))!, dayOne + 2);
   check("B reinstall pos-redact + 200 real = paid_active (acesso permitido)",
-    bState === "paid_active" && isCommercialAccessGranted(bState));
+    bState === "commercial_access_active" && isCommercialAccessGranted(bState));
 
   // C: reinstall pos-redact + Billing bloqueia (402 real observado) =>
   // NENHUM trial novo — o unico estado possivel e paid_inactive/billing_unknown,
@@ -120,7 +124,7 @@ async function main() {
     syncOrder("billing-c", "fake-token", "1", "paid", { fetchImpl: fakeFetch("not_found") }),
   );
   const cState = resolveStoreCommercialState((await getStoreCommercialCache("billing-c"))!, dayOne);
-  check("C 402 real observado = paid_inactive, sem trial novo", cState === "paid_inactive"
+  check("C 402 real observado = paid_inactive, sem trial novo", cState === "commercial_access_blocked"
     && !isCommercialAccessGranted(cState));
 
   // D: reinstall pos-redact + Billing timeout => billing_unknown, ZERO
@@ -149,13 +153,13 @@ async function main() {
     syncOrder("billing-e", "fake-token", "1", "paid", { fetchImpl: fakeFetch("not_found") }),
   );
   const eState = resolveStoreCommercialState((await getStoreCommercialCache("billing-e"))!, dayOne);
-  check("E loja legada + 402 = paid_inactive, sem trial gratis automatico", eState === "paid_inactive");
+  check("E loja legada + 402 = paid_inactive, sem trial gratis automatico", eState === "commercial_access_blocked");
 
   // F: loja legada + Billing concede acesso (200) => paid_active.
   await seedStore("billing-f", { plan: "crescimento" });
   await syncOrder("billing-f", "fake-token", "1", "paid", { fetchImpl: fakeFetch("found") });
   const fState = resolveStoreCommercialState((await getStoreCommercialCache("billing-f"))!, dayOne);
-  check("F loja legada + 200 real = paid_active", fState === "paid_active");
+  check("F loja legada + 200 real = paid_active", fState === "commercial_access_active");
 
   // G: outra store subscription => zero cross-tenant access. Bloquear A
   // nunca afeta B.
@@ -167,7 +171,7 @@ async function main() {
   await syncOrder("billing-g-b", "fake-token", "1", "paid", { fetchImpl: fakeFetch("found") });
   const gA = resolveStoreCommercialState((await getStoreCommercialCache("billing-g-a"))!, dayOne);
   const gB = resolveStoreCommercialState((await getStoreCommercialCache("billing-g-b"))!, dayOne);
-  check("G store A bloqueada nao afeta store B", gA === "paid_inactive" && gB === "paid_active");
+  check("G store A bloqueada nao afeta store B", gA === "commercial_access_blocked" && gB === "commercial_access_active");
 
   // H: corpo malformado da Nuvemshop => fail-closed (nenhum sinal gravado,
   // nunca tratado como acesso liberado por engano).
@@ -190,7 +194,7 @@ async function main() {
   await recordBillingAccessSignal("billing-timestamp-order", true, dayOne + 1);
   const orderState = resolveStoreCommercialState((await getStoreCommercialCache("billing-timestamp-order"))!, dayOne + 1);
   check("I ultimo sinal observado (por timestamp) determina o estado, deterministicamente",
-    orderState === "paid_inactive");
+    orderState === "commercial_access_blocked");
 
   // J (cross-check final): nenhum storeId/fallback comercial nosso persiste
   // apos redact — reconfirma via reinstall que NADA e herdado do estado

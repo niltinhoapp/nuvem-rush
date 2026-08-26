@@ -232,13 +232,15 @@ function BillingStatusCard({
 }) {
   const { title, description, appearance } = (() => {
     switch (billing.state) {
-      case "paid_active":
+      case "commercial_access_active":
         return {
-          title: "Acesso liberado",
-          description: `Seu plano ${PLANS.essencial.label} está liberado pela Nuvemshop (período grátis ou assinatura em dia).`,
+          title: "Acesso ativo",
+          // NUNCA "Plano ativo"/"assinatura em dia": um HTTP 200 da Nuvemshop
+          // so prova acesso liberado agora, nunca pagamento confirmado.
+          description: `Seu plano ${PLANS.essencial.label} está com acesso liberado pela Nuvemshop (período grátis ou assinatura em dia — a Nuvemshop não nos informa qual dos dois).`,
           appearance: "success" as const,
         };
-      case "paid_inactive":
+      case "commercial_access_blocked":
         return {
           title: "Acesso bloqueado pela Nuvemshop",
           description: "A Nuvemshop pausou o acesso deste app (pagamento pendente ou período grátis encerrado). Regularize pelo painel da Nuvemshop para retomar as automações.",

@@ -17,22 +17,22 @@ function main() {
   // Cache dentro do TTL, sem bloqueio -> paid_active.
   assert.equal(
     resolveStoreCommercialState({ billingBlocked: false, commercialSyncedAt: now - 1000 }, now),
-    "paid_active",
+    "commercial_access_active",
   );
   assert.equal(
     resolveStoreCommercialState({ commercialSyncedAt: now - 1000 }, now), // billingBlocked ausente = nao bloqueado
-    "paid_active",
+    "commercial_access_active",
   );
   // Cache dentro do TTL, bloqueada -> paid_inactive.
   assert.equal(
     resolveStoreCommercialState({ billingBlocked: true, commercialSyncedAt: now - 1000 }, now),
-    "paid_inactive",
+    "commercial_access_blocked",
   );
 
   // Cache exatamente no limite do TTL (nao passou) ainda e valida.
   assert.equal(
     resolveStoreCommercialState({ billingBlocked: false, commercialSyncedAt: now - COMMERCIAL_CACHE_TTL_MS }, now),
-    "paid_active",
+    "commercial_access_active",
   );
   // Cache passou do TTL -> billing_unknown, mesmo com billingBlocked=false
   // persistido (staleness nunca concede acesso as cegas).
@@ -54,8 +54,8 @@ function main() {
   );
   assert.equal(resolveStoreCommercialState({ billingBlocked: false, commercialSyncedAt: now }, Number.NaN), "billing_unknown");
 
-  assert.equal(isCommercialAccessGranted("paid_active"), true);
-  assert.equal(isCommercialAccessGranted("paid_inactive"), false);
+  assert.equal(isCommercialAccessGranted("commercial_access_active"), true);
+  assert.equal(isCommercialAccessGranted("commercial_access_blocked"), false);
   assert.equal(isCommercialAccessGranted("billing_unknown"), false);
 
   assert.equal(COMMERCIAL_CACHE_TTL_MS, 26 * 60 * 60 * 1000);
@@ -75,7 +75,10 @@ function main() {
   assert.match(dispatch, /commercialAccess/);
   assert.match(dispatch, /resolveStoreCommercialState/);
   assert.match(process, /resolveStoreCommercialState/);
-  assert.match(whatsappTest, /resolveStoreCommercialState/);
+  // testRateLimit.firestore.ts usa a guarda com probe fresco (efeito
+  // comercial externo real, sem chamada Nuvemshop natural na mesma
+  // execucao) em vez do pre-filtro puro — ver policy.ts::FINAL_GUARD_FRESHNESS_MS.
+  assert.match(whatsappTest, /ensureFreshCommercialAccess/);
   assert.match(whatsappTest, /commercial_inactive/);
 
   // Blocker 2 (redact): nenhum modulo de billing deve mais referenciar um

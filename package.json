@@ -26,7 +26,8 @@
     "test:lgpd:data-request-dashboard": "tsx scripts/test-lgpd-data-request-dashboard-emulator.ts",
     "test:lgpd:data-request-ui": "tsx scripts/test-lgpd-data-request-dashboard-ui.tsx",
     "test:billing:policy": "tsx scripts/test-billing-policy.ts",
-    "test:billing:trial:firestore": "tsx scripts/test-billing-trial-emulator.ts"
+    "test:billing:trial:firestore": "tsx scripts/test-billing-trial-emulator.ts",
+    "test:billing:final-guard-probe:firestore": "tsx scripts/test-billing-final-guard-probe-emulator.ts"
   },
   "engines": {
     "node": ">=22"
