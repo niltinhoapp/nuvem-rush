@@ -21,7 +21,7 @@ assert.match(processSource, /isStoreCommerciallyActive/);
 
 const dispatch = readFileSync(new URL("../lib/dispatch.ts", import.meta.url), "utf8");
 assert.match(dispatch, /loja inativa antes do envio/);
-assert.match(dispatch, /preSendJob/);
+assert.match(dispatch, /postProbeJob/);
 
 let status = "active";
 let jobs = ["scheduled", "processing", "sent"];

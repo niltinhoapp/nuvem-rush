@@ -10,11 +10,23 @@ import { db, storeRef } from "@/lib/firebase/admin";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import { NuvemshopClient, NuvemshopApiError } from "@/lib/nuvemshop/client";
 import {
-  resolveStoreCommercialState,
-  FINAL_GUARD_FRESHNESS_MS,
+  SAME_EXECUTION_SIGNAL_REUSE_MS,
   type StoreCommercialCache,
   type CommercialState,
 } from "./policy";
+
+// Um sinal 2xx/402 obtido MOMENTOS atras, na mesma execucao comercial (ex.:
+// um probe que acabou de rodar dentro do mesmo dispatchJob) — nunca uma
+// cache persistida. So e aceito por ensureFreshCommercialAccess se
+// `storeId` bater EXATAMENTE com a store sendo autorizada agora e
+// `observedAt` estiver dentro de SAME_EXECUTION_SIGNAL_REUSE_MS. Qualquer
+// storeId diferente (outra loja) e SEMPRE ignorado, mesmo que recente —
+// nunca ha reuso cross-tenant.
+export type SameExecutionSignal = {
+  storeId: string;
+  observedAt: number;
+  result: "active" | "blocked";
+};
 
 // Chamado por: app/api/webhooks/nuvemshop/route.ts (app/suspended|resumed —
 // sinal documentado e imediato) e pelos pontos que ja fazem chamadas reais
@@ -55,15 +67,29 @@ export async function getStoreCommercialCache(storeId: string): Promise<StoreCom
 }
 
 // Guarda IMEDIATAMENTE ANTES de um efeito comercial externo real (enviar
-// WhatsApp/e-mail, disparar webhook). Nunca autoriza so com base na cache de
-// 26h: exige um sinal visto ha no maximo FINAL_GUARD_FRESHNESS_MS (5 min);
-// se nao houver, faz um probe minimo `GET /store` (o endpoint oficial mais
-// barato ja usado neste repo para outros fins, com o access_token da propria
-// loja) e interpreta a resposta com o MESMO contrato documentado das outras
-// chamadas reais: 200 = acesso concedido agora; 402 = bloqueado (pagamento
-// OU dias gratis esgotados — o doc nao distingue); qualquer outra coisa
-// (timeout, 5xx, corpo malformado, erro de rede) e ambigua — fail-closed
-// para billing_unknown SEM gravar nenhum sinal (nunca um chute).
+// WhatsApp/e-mail, disparar webhook).
+//
+// REGRA CRITICA desta OS: um sinal POSITIVO em cache nunca autoriza sozinho,
+// nao importa a idade (nem "1 segundo atras" — a menos que seja literalmente
+// um sinal desta MESMA execucao, via `sameExecutionSignal`, escopado a esta
+// store exata). So dois caminhos concedem commercial_access_active:
+//   1) `sameExecutionSignal` valido (mesmo storeId, obtido ha no maximo
+//      SAME_EXECUTION_SIGNAL_REUSE_MS) — reaproveita uma resposta 2xx/402
+//      que o PROPRIO chamador acabou de observar nesta execucao, sem
+//      reintroduzir uma chamada de rede redundante.
+//   2) um probe minimo `GET /store` feito AGORA (endpoint oficial mais
+//      barato ja usado neste repo para outros fins, com o access_token da
+//      propria loja).
+// Um sinal NEGATIVO em cache (billingBlocked=true), por outro lado, PODE ser
+// reaproveitado independente da idade — bloquear a mais e fail-closed, nunca
+// um risco de conceder acesso indevido, e evita gastar probes/rate-limit da
+// Nuvemshop numa loja que ja sabemos estar bloqueada.
+//
+// Contrato da resposta do probe (documentado, mesmo das outras chamadas
+// reais): 200 = acesso concedido agora; 402 = bloqueado (pagamento OU dias
+// gratis esgotados — o doc nao distingue); qualquer outra coisa (timeout,
+// 5xx, corpo malformado, erro de rede) e ambigua — fail-closed para
+// billing_unknown SEM gravar nenhum sinal (nunca um chute).
 //
 // `fetchImpl` e injetavel so para teste (fake HTTP) — nunca chamado com a
 // API real nesta OS.
@@ -72,14 +98,25 @@ export async function ensureFreshCommercialAccess(
   accessToken: string,
   now: number = Date.now(),
   fetchImpl: typeof fetch = fetch,
+  sameExecutionSignal: SameExecutionSignal | null = null,
 ): Promise<CommercialState> {
-  const cache = await getStoreCommercialCache(storeId);
-  const freshEnough = typeof cache?.commercialSyncedAt === "number"
-    && Number.isFinite(cache.commercialSyncedAt)
+  if (
+    sameExecutionSignal
+    && sameExecutionSignal.storeId === storeId
+    && Number.isFinite(sameExecutionSignal.observedAt)
     && Number.isFinite(now)
-    && now - cache.commercialSyncedAt <= FINAL_GUARD_FRESHNESS_MS;
-  if (freshEnough) return resolveStoreCommercialState(cache!, now);
+    && now - sameExecutionSignal.observedAt >= 0
+    && now - sameExecutionSignal.observedAt <= SAME_EXECUTION_SIGNAL_REUSE_MS
+  ) {
+    return sameExecutionSignal.result === "blocked" ? "commercial_access_blocked" : "commercial_access_active";
+  }
 
+  // Negativo em cache: atalho seguro, sem probe (bloquear a mais e fail-closed).
+  const cache = await getStoreCommercialCache(storeId);
+  if (cache?.billingBlocked === true) return "commercial_access_blocked";
+
+  // Positivo em cache (ou ausencia de cache) NUNCA autoriza sozinho — sempre
+  // um probe fresco a partir daqui.
   const client = new NuvemshopClient(storeId, accessToken, { fetchImpl });
   try {
     await client.getStore();

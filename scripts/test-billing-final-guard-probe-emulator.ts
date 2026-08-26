@@ -1,10 +1,10 @@
-// Billing V1 — guarda final com probe fresco (OS "BILLING_FINAL_ACCESS_PROBE_READY").
-// Fecha o P1: um sinal de 26h nunca autoriza sozinho um efeito comercial
-// externo real (enviar WhatsApp/e-mail). A guarda final exige um sinal visto
-// ha no maximo FINAL_GUARD_FRESHNESS_MS (5 min); sem isso, faz um probe
-// minimo `GET /store` (endpoint oficial, ja usado no repo) com o
-// access_token da propria loja, interpretado com o MESMO contrato 200/402
-// das outras chamadas reais.
+// Billing V1 — guarda final SEM confianca em cache positivo (OS
+// "BILLING_EXACT_TRIAL_BOUNDARY_READY"). Fecha a janela de ate 5 min da OS
+// anterior: nenhum sinal positivo em cache, seja qual for a idade, autoriza
+// um provider comercial sozinho. So (a) um probe feito AGORA, ou (b) um
+// sinal 2xx/402 desta MESMA execucao (escopado a esta store exata, dentro
+// de SAME_EXECUTION_SIGNAL_REUSE_MS), autorizam. Negativo em cache pode
+// continuar sendo usado como atalho (fail-closed nunca e risco).
 //
 // ZERO chamadas reais: fetchImpl fake injetado em dispatchJob/claimWhatsappTestAttempt.
 import assert from "node:assert/strict";
@@ -17,16 +17,18 @@ initializeApp({ projectId: process.env.GCLOUD_PROJECT ?? "demo-nuvem-rush-billin
 type ProbeCall = { url: string; auth: string | null };
 
 // mode: "active" -> 200 (GET /store real); "blocked" -> 402;
-// "timeout"/"malformed"/"http_500" -> ambiguo. Registra cada chamada em `calls`
-// para o teste K (endpoint/auth oficiais) e para contar quantas vezes o
-// provider/probe realmente disparou.
+// "timeout"/"malformed"/"http_500" -> ambiguo. `onCall` roda ANTES da
+// resposta ser devolvida — simula algo acontecendo enquanto esperamos a
+// rede (corrida: uninstall/cancelamento/perda de reserva durante o probe).
 function fakeFetch(
   mode: "active" | "blocked" | "timeout" | "malformed" | "http_500",
   calls: ProbeCall[],
+  onCall?: () => Promise<void>,
 ): typeof fetch {
   return (async (url: string, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string> | undefined;
     calls.push({ url, auth: headers?.Authentication ?? null });
+    if (onCall) await onCall();
     if (mode === "timeout") {
       const err = new Error("aborted");
       err.name = "AbortError";
@@ -41,10 +43,10 @@ function fakeFetch(
 
 async function main() {
   const db = getFirestore();
-  const { recordBillingAccessSignal, getStoreCommercialCache } =
+  const { recordBillingAccessSignal, getStoreCommercialCache, ensureFreshCommercialAccess } =
     await import("../lib/billing/accessSignal.firestore");
-  const { COMMERCIAL_CACHE_TTL_MS, FINAL_GUARD_FRESHNESS_MS } = await import("../lib/billing/policy");
-  const { dispatchJob, claimJobForDispatch } = await import("../lib/dispatch");
+  const { SAME_EXECUTION_SIGNAL_REUSE_MS } = await import("../lib/billing/policy");
+  const { dispatchJob } = await import("../lib/dispatch");
   const { claimWhatsappTestAttempt } = await import("../lib/whatsapp/testRateLimit.firestore");
 
   let passed = 0;
@@ -55,8 +57,8 @@ async function main() {
   };
 
   const stores = [
-    "probe-b", "probe-c", "probe-d", "probe-e", "probe-f", "probe-g",
-    "probe-h", "probe-i", "probe-j-a", "probe-j-b", "probe-wa",
+    "probe-a", "probe-b", "probe-c", "probe-d", "probe-e", "probe-f", "probe-g",
+    "probe-h", "probe-i", "probe-j", "probe-k-a", "probe-k-b", "probe-wa", "probe-m", "probe-m-expired",
   ];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
 
@@ -86,147 +88,170 @@ async function main() {
 
   const now = Date.UTC(2026, 7, 25, 12, 0, 0);
 
-  // B: 402 => provider 0. Sinal recente de "bloqueado" (ex.: veio de um 402
-  // observado minutos atras por outra chamada real) — dentro da janela de
-  // frescor, entao a guarda final confia nele sem re-probar; ainda assim
-  // prova 402 => 0 provider.
+  // A: 200 de 1s atras em cache + probe atual 402 => provider 0.
+  await seedStore("probe-a");
+  await seedScheduledJob("probe-a");
+  await recordBillingAccessSignal("probe-a", false, now - 1000); // "liberado" ha 1s
+  const aCalls: ProbeCall[] = [];
+  const aResult = await dispatchJob("probe-a", "job-1", fakeFetch("blocked", aCalls));
+  check("A cache positiva de 1s atras NAO basta: probe atual 402 => cancelado (0 provider)",
+    aResult.status === "cancelled" && aCalls.length === 1);
+
+  // B: 200 de 4m59s atras + probe atual 402 => provider 0 (mesma regra de A,
+  // prova que NAO existe mais janela de frescor para positivo).
   await seedStore("probe-b");
   await seedScheduledJob("probe-b");
-  await recordBillingAccessSignal("probe-b", true, now); // 402 real, recente
+  await recordBillingAccessSignal("probe-b", false, now - (5 * 60 * 1000 - 1000));
   const bCalls: ProbeCall[] = [];
   const bResult = await dispatchJob("probe-b", "job-1", fakeFetch("blocked", bCalls));
-  // O pre-filtro do claim ja nega (mesmo sinal, mais barato: sem chamada de
-  // rede) — o job e cancelado no Firestore, mas dispatchJob reporta "skipped"
-  // para esse caminho (ver lib/dispatch.ts claimJobForDispatch). 0 provider.
-  check("B sinal 402 recente => 0 chamadas ao provider de envio (job nunca sai do claim)",
-    bResult.status === "skipped" && bCalls.length === 0);
-  const bJob = (await db.doc("stores/probe-b/jobs/job-1").get()).data();
-  check("B job cancelado no Firestore com motivo commercial_inactive",
-    bJob?.status === "cancelled" && bJob?.cancelReason === "commercial_inactive");
+  check("B cache positiva de 4m59s atras tambem NAO basta: probe atual 402 => cancelado (0 provider)",
+    bResult.status === "cancelled" && bCalls.length === 1);
 
-  // C: SEM nenhum sinal previo — nem o pre-filtro do claim (cache de 26h)
-  // nem a guarda final tem prova de acesso; falha fechado antes mesmo de
-  // qualquer chamada de rede (billing_unknown), 0 provider.
+  // C: cache positiva recem-gravada (poucos ms) SEM sameExecutionSignal ->
+  // ensureFreshCommercialAccess ainda assim faz o probe (nao basta sozinha).
   await seedStore("probe-c");
-  await seedScheduledJob("probe-c");
+  await recordBillingAccessSignal("probe-c", false, now);
   const cCalls: ProbeCall[] = [];
-  const cResult = await dispatchJob("probe-c", "job-1", fakeFetch("timeout", cCalls));
-  check("C sem sinal algum => job nunca sai do claim (0 provider, 0 chamadas de rede)",
-    cResult.status === "skipped" && cCalls.length === 0);
-  const cCache = await getStoreCommercialCache("probe-c");
-  check("C nenhum sinal e gravado quando o claim ja fecha antes da guarda final",
-    cCache?.commercialSyncedAt === undefined);
+  const cState = await ensureFreshCommercialAccess("probe-c", "fake-token", now + 1, fakeFetch("blocked", cCalls));
+  check("C cache positiva recem-gravada nao dispensa o probe (probe foi feito)", cCalls.length === 1);
+  check("C resultado reflete o probe atual (402), nao a cache antiga (liberado)",
+    cState === "commercial_access_blocked");
 
-  // D: job scheduled quando o sinal em cache ainda dizia "liberado" mas ja
-  // esta fora da janela de frescor (cenario real do fim dos "dias gratis":
-  // nao dispara app/suspended, entao so o probe da guarda final pega isso).
-  // Claim passa (cache de 26h ainda valida), mas o probe fresco no
-  // dispatchJob encontra 402 => cancelado, 0 provider.
+  // D: probe atual 200 => provider permitido se demais guards passam.
   await seedStore("probe-d");
   await seedScheduledJob("probe-d");
-  await recordBillingAccessSignal("probe-d", false, now - FINAL_GUARD_FRESHNESS_MS - 1); // liberado, porem velho
   const dCalls: ProbeCall[] = [];
-  const dResult = await dispatchJob("probe-d", "job-1", fakeFetch("blocked", dCalls));
-  check("D dias gratis esgotados (sem webhook): probe fresco pega e cancela, 0 provider",
-    dResult.status === "cancelled" && dCalls.length === 1);
-  const dJob = (await db.doc("stores/probe-d/jobs/job-1").get()).data();
-  check("D cancelReason = commercial_inactive", dJob?.cancelReason === "commercial_inactive");
+  const dResult = await dispatchJob("probe-d", "job-1", fakeFetch("active", dCalls));
+  check("D probe 200 => gate comercial libera (nao cancela por commercial_inactive)",
+    !(dResult.status === "cancelled" && "reason" in dResult && /comercial/i.test(String((dResult as { reason?: string }).reason ?? ""))));
+  const dCache = await getStoreCommercialCache("probe-d");
+  check("D sinal gravado como liberado apos o probe", dCache?.billingBlocked === false);
 
-  // E: o CLAIM ve um sinal "liberado" ainda dentro do TTL de 26h (passa),
-  // mas ja fora da janela de frescor de 5 min exigida pela guarda FINAL —
-  // dentro do MESMO dispatchJob, a guarda forca um probe novo e bloqueia,
-  // mesmo com o claim tendo aprovado o job com base na cache mais antiga.
+  // E: probe atual timeout => provider 0. Sinal antigo (mas dentro do TTL de
+  // 26h do pre-filtro do claim) garante que o job chega ate a guarda final,
+  // onde o probe (sempre feito, ver regra critica) encontra o timeout.
   await seedStore("probe-e");
   await seedScheduledJob("probe-e");
-  await recordBillingAccessSignal("probe-e", false, now - FINAL_GUARD_FRESHNESS_MS - 1); // liberado, mas ha mais de 5 min
+  await recordBillingAccessSignal("probe-e", false, now - 10 * 60 * 1000);
   const eCalls: ProbeCall[] = [];
-  const eResult = await dispatchJob("probe-e", "job-1", fakeFetch("blocked", eCalls));
-  check("E claim passa com cache antiga, mas guarda final re-proba e bloqueia (0 provider de envio)",
-    eResult.status === "cancelled" && eCalls.length === 1);
+  const eResult = await dispatchJob("probe-e", "job-1", fakeFetch("timeout", eCalls));
+  check("E probe timeout => cancelado (0 provider)", eResult.status === "cancelled" && eCalls.length >= 1);
 
-  // F: sinal 200 antigo (fora da janela de frescor) + probe atual 402 =>
-  // provider 0. Prova que a cache de 26h NUNCA autoriza sozinha.
+  // F: probe atual 5xx => provider 0.
   await seedStore("probe-f");
   await seedScheduledJob("probe-f");
-  await recordBillingAccessSignal("probe-f", false, now - FINAL_GUARD_FRESHNESS_MS - 1); // "liberado" ha mais de 5 min
+  await recordBillingAccessSignal("probe-f", false, now - 10 * 60 * 1000);
   const fCalls: ProbeCall[] = [];
-  const fResult = await dispatchJob("probe-f", "job-1", fakeFetch("blocked", fCalls));
-  check("F sinal liberado antigo + probe atual 402 => cancelado (0 provider)", fResult.status === "cancelled");
-  check("F o probe FOI feito (sinal antigo nao foi aceito as cegas)", fCalls.length === 1);
+  const fResult = await dispatchJob("probe-f", "job-1", fakeFetch("http_500", fCalls));
+  check("F probe 5xx => cancelado (0 provider)", fResult.status === "cancelled" && fCalls.length >= 1);
 
-  // G: sinal 200 antigo + probe atual falha (timeout) => billing_unknown =>
-  // provider 0. A cache antiga nao "salva" a decisao quando o refresh falha.
+  // G: probe atual 402 => provider 0.
   await seedStore("probe-g");
   await seedScheduledJob("probe-g");
-  await recordBillingAccessSignal("probe-g", false, now - FINAL_GUARD_FRESHNESS_MS - 1);
+  await recordBillingAccessSignal("probe-g", false, now - 10 * 60 * 1000);
   const gCalls: ProbeCall[] = [];
-  const gResult = await dispatchJob("probe-g", "job-1", fakeFetch("timeout", gCalls));
-  check("G sinal liberado antigo + probe atual timeout => cancelado (0 provider)", gResult.status === "cancelled");
+  const gResult = await dispatchJob("probe-g", "job-1", fakeFetch("blocked", gCalls));
+  check("G probe 402 => cancelado (0 provider)", gResult.status === "cancelled" && gCalls.length >= 1);
 
-  // H: probe atual 200 => provider permitido (demais guards ok). Job E-MAIL
-  // usa lib/channels/email — sem credencial real configurada ele falha no
-  // PROVIDER (nao no gate comercial); o que provamos aqui e que o gate
-  // comercial deixou passar (delivery nao foi cancelado por commercial_inactive).
+  // H: store desinstalada DURANTE o probe (a mutacao acontece dentro do
+  // fetch fake, simulando a corrida) => provider 0, mesmo com o probe em si
+  // retornando 200. A RE-LEITURA pos-probe pega o uninstall.
   await seedStore("probe-h");
   await seedScheduledJob("probe-h");
+  await recordBillingAccessSignal("probe-h", false, now - 10 * 60 * 1000);
   const hCalls: ProbeCall[] = [];
-  const hResult = await dispatchJob("probe-h", "job-1", fakeFetch("active", hCalls));
-  check("H probe 200 => gate comercial libera (nao cancela por commercial_inactive)",
-    !(hResult.status === "cancelled" && "reason" in hResult && /comercial/i.test(String((hResult as { reason?: string }).reason ?? ""))));
-  const hCache = await getStoreCommercialCache("probe-h");
-  check("H sinal gravado como liberado apos o probe", hCache?.billingBlocked === false);
+  const hResult = await dispatchJob("probe-h", "job-1", fakeFetch("active", hCalls, async () => {
+    await db.doc("stores/probe-h").set({ status: "uninstalled" }, { merge: true });
+  }));
+  check("H store desinstalada durante o probe => cancelado (0 provider), mesmo com probe 200",
+    hResult.status === "cancelled");
 
-  // I: loja desinstalada/redacted + probe retornaria 200 (se fosse chamado)
-  // => provider 0. O lifecycle da loja precede qualquer sinal comercial —
-  // a guarda final ve storeActive=false e bloqueia antes mesmo do resultado
-  // do probe importar.
-  await seedStore("probe-i", { status: "uninstalled" });
-  await db.doc("stores/probe-i/jobs/job-1").set({
-    jobId: "job-1", storeId: "probe-i", enrollmentId: "enr-1", flowId: "flow-1",
-    stepIndex: 0, channel: "email", runAt: 1, status: "scheduled",
-  });
-  const iClaim = await claimJobForDispatch("probe-i", "job-1", now, () => "res-i");
-  check("I loja desinstalada: claim ja recusa antes mesmo da guarda final (0 provider)", iClaim.ok === false);
+  // I: enrollment cancelado DURANTE o probe => provider 0.
+  await seedStore("probe-i");
+  await seedScheduledJob("probe-i");
+  await recordBillingAccessSignal("probe-i", false, now - 10 * 60 * 1000);
+  const iCalls: ProbeCall[] = [];
+  const iResult = await dispatchJob("probe-i", "job-1", fakeFetch("active", iCalls, async () => {
+    await db.doc("stores/probe-i/enrollments/enr-1").set({ status: "cancelled" }, { merge: true });
+  }));
+  check("I enrollment cancelado durante o probe => cancelado (0 provider), mesmo com probe 200",
+    iResult.status === "cancelled");
 
-  // J: probe/sinal de A nunca autoriza B (cross-tenant).
-  await seedStore("probe-j-a");
-  await seedStore("probe-j-b");
-  await seedScheduledJob("probe-j-a");
-  await seedScheduledJob("probe-j-b");
-  const jACalls: ProbeCall[] = [];
-  await dispatchJob("probe-j-a", "job-1", fakeFetch("active", jACalls)); // A fica liberada
-  const jBCalls: ProbeCall[] = [];
-  const jBResult = await dispatchJob("probe-j-b", "job-1", fakeFetch("blocked", jBCalls)); // B nunca teve nenhum sinal
-  check("J acesso liberado de A nao vaza para B (B sem sinal proprio = negado no claim, 0 provider)",
-    jBResult.status === "skipped" && jBCalls.length === 0);
-  const jACache = await getStoreCommercialCache("probe-j-a");
-  const jBCache = await getStoreCommercialCache("probe-j-b");
-  check("J caches de A e B sao independentes",
-    jACache?.billingBlocked === false && jBCache?.commercialSyncedAt === undefined);
+  // J: reserva de cota perdida DURANTE o probe (outro worker "roubou" o job)
+  // => provider 0.
+  await seedStore("probe-j");
+  await seedScheduledJob("probe-j");
+  await recordBillingAccessSignal("probe-j", false, now - 10 * 60 * 1000);
+  const jCalls: ProbeCall[] = [];
+  const jResult = await dispatchJob("probe-j", "job-1", fakeFetch("active", jCalls, async () => {
+    await db.doc("stores/probe-j/jobs/job-1").set({ quotaReservationId: "outro-worker" }, { merge: true });
+  }));
+  check("J reserva de cota perdida durante o probe => cancelado (0 provider), mesmo com probe 200",
+    jResult.status === "cancelled");
 
-  // K: o probe usa o endpoint oficial GET /store (ja documentado e usado
-  // neste repo para outro fim) com Authentication: bearer <token da propria loja>.
-  check("K probe chama .../store (endpoint oficial)", dCalls[0]!.url.endsWith("/probe-d/store"));
-  check("K probe autentica com o access_token da propria loja (bearer)", dCalls[0]!.auth === "bearer fake-token");
+  // K: cross-tenant — probe/sinal de A nunca autoriza B.
+  await seedStore("probe-k-a");
+  await seedStore("probe-k-b");
+  await seedScheduledJob("probe-k-a");
+  await seedScheduledJob("probe-k-b");
+  await recordBillingAccessSignal("probe-k-a", false, now - 10 * 60 * 1000);
+  await recordBillingAccessSignal("probe-k-b", false, now - 10 * 60 * 1000);
+  const kACalls: ProbeCall[] = [];
+  await dispatchJob("probe-k-a", "job-1", fakeFetch("active", kACalls)); // A fica liberada
+  const kBCalls: ProbeCall[] = [];
+  const kBResult = await dispatchJob("probe-k-b", "job-1", fakeFetch("blocked", kBCalls)); // B tem seu proprio probe
+  check("K acesso liberado de A nao vaza para B (B recusado pelo seu proprio probe)",
+    kBResult.status === "cancelled" && kBCalls.length === 1);
+  const kACache = await getStoreCommercialCache("probe-k-a");
+  const kBCache = await getStoreCommercialCache("probe-k-b");
+  check("K caches de A e B sao independentes", kACache?.billingBlocked === false && kBCache?.billingBlocked === true);
 
-  // WhatsApp test: mesmo mecanismo de guarda final (probe fresco antes do
-  // efeito comercial real, fora da transacao Firestore).
+  // L: WhatsApp test segue a MESMA regra — cache positiva antiga nao basta,
+  // exige probe atual (ou sinal desta execucao).
   await seedStore("probe-wa");
-  const waBlockedCalls: ProbeCall[] = [];
-  const waBlocked = await claimWhatsappTestAttempt("probe-wa", now, fakeFetch("blocked", waBlockedCalls));
-  check("WhatsApp test: probe 402 => 402 (0 envio)", waBlocked.ok === false && !waBlocked.ok && waBlocked.status === 402);
-  await recordBillingAccessSignal("probe-wa", false, now); // libera para o proximo teste
-  const waOkCalls: ProbeCall[] = [];
-  // Sinal fresco (acabou de ser gravado) -> nao deveria precisar de novo probe.
-  const waOk = await claimWhatsappTestAttempt("probe-wa", now, fakeFetch("active", waOkCalls));
-  check("WhatsApp test: sinal fresco (< 5 min) dispensa novo probe", waOkCalls.length === 0 && waOk.ok === true);
+  await recordBillingAccessSignal("probe-wa", false, now - (4 * 60 * 1000)); // "liberado" ha 4 min
+  const waCalls: ProbeCall[] = [];
+  const waBlocked = await claimWhatsappTestAttempt("probe-wa", now, fakeFetch("blocked", waCalls));
+  check("L WhatsApp test: cache positiva antiga nao basta, probe atual 402 => bloqueado",
+    !waBlocked.ok && waBlocked.status === 402 && waCalls.length === 1);
+  const waLimitDoc = await db.doc("stores/probe-wa/whatsapp_test_limits/global").get();
+  check("L teste bloqueado nao consome janela de rate limit", !waLimitDoc.exists);
 
-  // L (relatorio): nenhuma chamada neste arquivo usou fetch real — todas via
-  // fakeFetch injetado, confirmado pelas contagens/URLs acima serem do
-  // fake Response, nunca uma resposta de rede real.
-  check("L nenhuma chamada real: todo fetchImpl injetado retornou Response fake local", true);
+  // M: reuso de sinal 2xx da MESMA execucao so vale para o MESMO storeId —
+  // um sinal de outra store (mesmo recente) e sempre ignorado e forca probe;
+  // um sinal da PROPRIA store, dentro da janela, dispensa probe novo.
+  await seedStore("probe-m");
+  const mCallsWrongStore: ProbeCall[] = [];
+  const mWrongStoreState = await ensureFreshCommercialAccess(
+    "probe-m", "fake-token", now, fakeFetch("blocked", mCallsWrongStore),
+    { storeId: "outra-store-qualquer", observedAt: now - 100, result: "active" },
+  );
+  check("M sinal de OUTRA store nunca e reaproveitado (probe proprio foi feito)",
+    mCallsWrongStore.length === 1 && mWrongStoreState === "commercial_access_blocked");
 
-  console.log(`\n${passed} testes de guarda final com probe fresco (Billing V1) no Firestore Emulator passaram`);
+  const mCallsRightStore: ProbeCall[] = [];
+  const mRightStoreState = await ensureFreshCommercialAccess(
+    "probe-m", "fake-token", now, fakeFetch("active", mCallsRightStore),
+    { storeId: "probe-m", observedAt: now - 100, result: "active" },
+  );
+  check("M sinal da MESMA store dentro da janela dispensa novo probe",
+    mCallsRightStore.length === 0 && mRightStoreState === "commercial_access_active");
+
+  // O primeiro caso (M/store errada) ja deixou "probe-m" com cache negativa
+  // real (o probe verdadeiro respondeu 402) — por isso este terceiro caso
+  // usa uma store fresca, sem nenhuma cache previa, para provar isoladamente
+  // que um sameExecutionSignal EXPIRADO (fora da janela) e descartado e
+  // forca um probe novo, em vez de ser aceito as cegas.
+  await seedStore("probe-m-expired");
+  const mCallsExpired: ProbeCall[] = [];
+  const mExpiredState = await ensureFreshCommercialAccess(
+    "probe-m-expired", "fake-token", now, fakeFetch("blocked", mCallsExpired),
+    { storeId: "probe-m-expired", observedAt: now - SAME_EXECUTION_SIGNAL_REUSE_MS - 1, result: "active" },
+  );
+  check("M sinal da mesma store porem fora da janela de reuso forca novo probe",
+    mCallsExpired.length === 1 && mExpiredState === "commercial_access_blocked");
+
+  console.log(`\n${passed} testes de guarda final sem confianca em cache positivo (Billing V1) no Firestore Emulator passaram`);
 }
 
 main().catch((error: unknown) => {

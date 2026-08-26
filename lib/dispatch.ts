@@ -189,32 +189,39 @@ export async function dispatchJob(
     return { ok: true, status: "cancelled", reason: "step inexistente" };
   }
 
-  // Guarda FINAL: as leituras ocorrem depois de todo bookkeeping auxiliar e o
-  // provider e iniciado sem nenhum await entre a decisao e a chamada externa.
+  // Guarda FINAL: probe Nuvemshop atual -> RE-LEITURA de store/job/enrollment
+  // (fecha a corrida: uninstall/cancelamento/perda de reserva DURANTE o probe
+  // nao pode ser ignorado) -> decisao -> provider iniciado sem nenhum await
+  // entre a decisao e a chamada externa.
   const delivery = await runWithFinalCommercialGuard(
     async () => {
-      const [preSendStore, preSendJob, preSendEnrollment] = await Promise.all([
+      // 1) Leitura minima so para obter o accessToken e fazer o probe. O
+      // probe e a unica etapa com latencia de rede real (com retry/backoff
+      // do proprio NuvemshopClient) — por isso as leituras de lifecycle que
+      // IMPORTAM para a decisao final vem DEPOIS dele, nunca antes.
+      const preProbeStore = (await storeRef(storeId).get()).data() as Store | undefined;
+      const commercialState = preProbeStore?.accessToken
+        ? await ensureFreshCommercialAccess(storeId, preProbeStore.accessToken, Date.now(), fetchImpl)
+        : "billing_unknown";
+
+      // 2) Re-leitura POS-probe: qualquer uninstall/cancelamento/liberacao de
+      // reserva que tenha acontecido durante a espera de rede do probe agora
+      // e capturado aqui, imediatamente antes do zero-await ate o provider.
+      const [postProbeStore, postProbeJob, postProbeEnrollment] = await Promise.all([
         storeRef(storeId).get(),
         jobRef.get(),
         col(storeId, "enrollments").doc(job.enrollmentId).get(),
       ]);
-      const preSendStoreData = preSendStore.data() as Store | undefined;
-      // Guarda final (ver lib/billing/policy.ts::FINAL_GUARD_FRESHNESS_MS):
-      // nunca autoriza so com a cache de 26h. Exige um sinal visto ha no
-      // maximo 5 min; sem isso, faz um probe minimo GET /store aqui mesmo,
-      // ainda dentro da fase de leitura (antes do zero-await ate o provider).
-      const commercialState = preSendStoreData?.accessToken
-        ? await ensureFreshCommercialAccess(storeId, preSendStoreData.accessToken, Date.now(), fetchImpl)
-        : "billing_unknown";
+      const postProbeStoreData = postProbeStore.data() as Store | undefined;
       return {
-        storeActive: isStoreCommerciallyActive(preSendStoreData?.status),
+        storeActive: isStoreCommerciallyActive(postProbeStoreData?.status),
         commercialAccess: isCommercialAccessGranted(commercialState),
         jobProcessing: hasMatchingQuotaReservation(
-          preSendStoreData,
-          preSendJob.data() as Job | undefined,
+          postProbeStoreData,
+          postProbeJob.data() as Job | undefined,
           reservationId,
         ),
-        enrollmentActive: preSendEnrollment.data()?.status === "active",
+        enrollmentActive: postProbeEnrollment.data()?.status === "active",
       };
     },
     async () => {

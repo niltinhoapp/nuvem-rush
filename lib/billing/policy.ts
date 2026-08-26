@@ -44,23 +44,23 @@ export type CommercialState = "commercial_access_active" | "commercial_access_bl
 // herda o ultimo estado conhecido as cegas.
 //
 // Esta cache serve so como PRE-FILTRO barato (claim de job, ativacao de
-// flow) — nunca autoriza sozinha um efeito comercial externo real. Para
-// isso, ver FINAL_GUARD_FRESHNESS_MS + ensureFreshCommercialAccess em
-// accessSignal.firestore.ts.
+// flow) — NUNCA autoriza sozinha um efeito comercial externo real, seja qual
+// for a idade do sinal positivo (mesmo "ha 1 segundo"). Correcao desta OS:
+// um positivo em cache (mesmo recente) nao e prova suficiente para gastar um
+// provider real — so um probe feito NA MESMA execucao (ou uma resposta 2xx
+// genuina obtida na mesma execucao, com vinculo explicito de store/execucao)
+// autoriza. Um NEGATIVO em cache, por outro lado, pode continuar sendo usado
+// como atalho seguro (bloquear a mais e fail-closed, nunca um risco). Ver
+// ensureFreshCommercialAccess em accessSignal.firestore.ts.
 export const COMMERCIAL_CACHE_TTL_MS = 26 * 60 * 60 * 1000;
 
-// Janela de frescor exigida IMEDIATAMENTE ANTES de qualquer efeito comercial
-// externo real (enviar WhatsApp/e-mail, disparar webhook, etc.) — usada pela
-// guarda final do dispatch e pelo teste de WhatsApp. Bem mais curta que
-// COMMERCIAL_CACHE_TTL_MS de proposito: o pre-filtro (26h) so evita
-// trabalho obviamente inutil (claim, criacao de job); a guarda final e quem
-// de fato autoriza gastar uma mensagem/webhook real, entao exige um sinal
-// visto ha no maximo 5 minutos — se nao houver, faz um probe minimo (GET
-// /store) antes de prosseguir. 5 min e curto o bastante para nunca cruzar o
-// vencimento dos 14 dias por acaso, e longo o bastante para nao gerar um
-// probe por job quando varios jobs da mesma store disparam em sequencia
-// dentro da mesma janela do cron (a cada 5 min).
-export const FINAL_GUARD_FRESHNESS_MS = 5 * 60 * 1000;
+// Janela para reaproveitar um sinal 2xx/402 OBTIDO NA MESMA EXECUCAO
+// comercial (ex.: um probe que acabou de rodar dentro do mesmo dispatchJob),
+// nunca uma cache persistida entre execucoes diferentes. Bem curta de
+// proposito — so cobre "a resposta que acabei de receber, sem nenhum await
+// assincrono relevante depois" (ex.: milissegundos entre o probe e o
+// re-check final), nunca "5 minutos atras" ou "outro job/cron".
+export const SAME_EXECUTION_SIGNAL_REUSE_MS = 2_000;
 
 export interface StoreCommercialCache {
   // true = ultimo sinal PROVADO (webhook ou 402 observado) foi "bloqueado".
