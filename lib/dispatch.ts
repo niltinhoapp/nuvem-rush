@@ -190,10 +190,16 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
         jobRef.get(),
         col(storeId, "enrollments").doc(job.enrollmentId).get(),
       ]);
+      const preSendStoreData = preSendStore.data() as Store | undefined;
       return {
-        storeActive: isStoreCommerciallyActive(preSendStore.data()?.status),
+        storeActive: isStoreCommerciallyActive(preSendStoreData?.status),
+        // Revalida com relogio server-side depois das leituras finais. Nao ha
+        // await entre esta decisao e a invocacao do provider.
+        commercialAccess: !!preSendStoreData && isCommercialAccessGranted(
+          resolveCommercialState(preSendStoreData, Date.now()),
+        ),
         jobProcessing: hasMatchingQuotaReservation(
-          preSendStore.data() as Store | undefined,
+          preSendStoreData,
           preSendJob.data() as Job | undefined,
           reservationId,
         ),
@@ -254,7 +260,11 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
       await cancelJobAndReleaseQuota({
         storeId,
         jobRef,
-        reason: !delivery.state.storeActive ? "store_inactive" : "enrollment_inactive",
+        reason: !delivery.state.storeActive
+          ? "store_inactive"
+          : !delivery.state.commercialAccess
+            ? "commercial_inactive"
+            : "enrollment_inactive",
         now: Date.now(),
         expectedStatus: "processing",
       });
@@ -264,6 +274,8 @@ export async function dispatchJob(storeId: string, jobId: string): Promise<Dispa
       status: "cancelled",
       reason: !delivery.state.storeActive
         ? "loja inativa antes do envio"
+        : !delivery.state.commercialAccess
+          ? "acesso comercial inativo antes do envio"
         : !delivery.state.enrollmentActive
           ? "enrollment inativo antes do envio"
           : "job cancelado antes do envio",

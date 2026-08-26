@@ -1,13 +1,14 @@
 import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Store } from "@/types";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { isCommercialAccessGranted, resolveCommercialState } from "@/lib/billing/policy";
 import { decideWhatsappTestAttempt, type WhatsappTestLimitState } from "./testRateLimit";
 
 const LIMIT_DOC_ID = "global";
 
 export type WhatsappTestAttemptClaim =
   | { ok: true }
-  | { ok: false; status: 409 | 429; reason: "store_inactive" | "cooldown" | "daily_limit" };
+  | { ok: false; status: 402 | 409 | 429; reason: "commercial_inactive" | "store_inactive" | "cooldown" | "daily_limit" };
 
 // O unico dado persistido e uma janela tenant-scoped de abuso: data, contador
 // e timestamp. Destino, mensagem, token e resposta do provider nunca entram no
@@ -23,8 +24,11 @@ export async function claimWhatsappTestAttempt(
       tx.get(ref),
     ]);
     const store = storeSnap.data() as Store | undefined;
-    if (!isStoreCommerciallyActive(store?.status)) {
+    if (!store || !isStoreCommerciallyActive(store.status)) {
       return { ok: false, status: 409, reason: "store_inactive" };
+    }
+    if (!isCommercialAccessGranted(resolveCommercialState(store, now))) {
+      return { ok: false, status: 402, reason: "commercial_inactive" };
     }
     const decision = decideWhatsappTestAttempt(
       limitSnap.data() as WhatsappTestLimitState | undefined,

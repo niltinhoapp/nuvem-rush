@@ -28,6 +28,7 @@ async function main() {
     await db.doc(`stores/${storeId}`).set({
       storeId,
       status: options.status ?? "active",
+      trialEndsAt: now + 14 * 24 * 60 * 60 * 1000,
       quotas: {
         periodKey: "2026-08",
         dispatchesMonthUsed: options.used ?? 99,

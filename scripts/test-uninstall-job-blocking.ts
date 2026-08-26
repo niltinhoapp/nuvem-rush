@@ -45,6 +45,7 @@ async function guardedDispatch(
   const result = await runWithFinalCommercialGuard(
     async () => ({
       storeActive: state.storeStatus === "active",
+      commercialAccess: true,
       jobProcessing: state.job === "processing",
       enrollmentActive: state.enrollmentActive,
     }),

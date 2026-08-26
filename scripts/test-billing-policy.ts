@@ -23,6 +23,9 @@ function main() {
   // exclusivo, sem ambiguidade de "ultimo segundo ainda vale").
   assert.equal(resolveCommercialState({ trialEndsAt: now }, now), "trial_expired");
   assert.equal(resolveCommercialState({ trialEndsAt: now - 1 }, now), "trial_expired");
+  assert.equal(resolveCommercialState({ trialEndsAt: Number.NaN }, now), "trial_expired");
+  assert.equal(resolveCommercialState({ trialEndsAt: Number.POSITIVE_INFINITY }, now), "trial_expired");
+  assert.equal(resolveCommercialState({ trialEndsAt: now + 1 }, Number.NaN), "trial_expired");
 
   // Assinatura ativa sempre vence, mesmo sem trial ou com trial ja vencido.
   assert.equal(
@@ -69,12 +72,20 @@ function main() {
   assert.equal(trialDaysRemaining(now + 24 * 60 * 60 * 1000, now), 1);
   assert.equal(trialDaysRemaining(now + 24 * 60 * 60 * 1000 + 1, now), 2);
   assert.equal(trialDaysRemaining(now + TRIAL_DURATION_MS, now), 14);
+  assert.equal(trialDaysRemaining(Number.POSITIVE_INFINITY, now), 0);
+  assert.equal(trialDaysRemaining(now + 1, Number.NaN), 0);
 
   // Relogio do cliente nao entra na formula: a funcao so aceita `now` do
   // chamador (server-side) e trialEndsAt persistido — nao ha leitura de
   // Date.now() do browser em lugar nenhum deste modulo.
   const source = readFileSync(new URL("../lib/billing/policy.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /window\.|document\./);
+  const dispatch = readFileSync(new URL("../lib/dispatch.ts", import.meta.url), "utf8");
+  const process = readFileSync(new URL("../lib/rules/process.ts", import.meta.url), "utf8");
+  const whatsappTest = readFileSync(new URL("../lib/whatsapp/testRateLimit.firestore.ts", import.meta.url), "utf8");
+  assert.match(dispatch, /commercialAccess/);
+  assert.match(process, /resolveCommercialState/);
+  assert.match(whatsappTest, /commercial_inactive/);
 
   console.log("Billing policy: OK");
 }

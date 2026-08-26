@@ -27,7 +27,8 @@ async function main() {
     "billing-uninstall", "billing-expired-reinstall", "billing-repeat",
     "billing-paid", "billing-cancelled", "billing-tenant-a", "billing-tenant-b",
     "billing-dispatch-expired", "billing-dispatch-active", "billing-redact",
-    "billing-api-gate", "billing-api-gate-active",
+    "billing-api-gate", "billing-api-gate-active", "billing-invalid-ledger",
+    "billing-enrollment-expired",
   ];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
   for (const id of stores) await db.doc(`commercial_entitlements/${id}`).delete().catch(() => {});
@@ -145,10 +146,23 @@ async function main() {
   const tAAfter = await getTrialLedger("billing-tenant-a");
   check("M alterar B nao afeta A", tAAfter?.trialStartedAt === tA.trialStartedAt);
 
-  // N: o ledger anti-reset nao contem PII (so identidade estavel + datas).
+  // N: o ledger minimizado nao repete storeId/updatedAt no corpo. A identidade
+  // ainda existe no doc id e depende de decisao formal de retencao (relatorio).
   const ledgerFields = Object.keys((await getTrialLedger("billing-tenant-a"))!).sort();
-  check("N ledger contem somente storeId/trialConsumed/trialStartedAt/trialEndsAt/updatedAt",
-    JSON.stringify(ledgerFields) === JSON.stringify(["storeId", "trialConsumed", "trialEndsAt", "trialStartedAt", "updatedAt"].sort()));
+  check("N ledger contem somente trialConsumed/trialStartedAt/trialEndsAt",
+    JSON.stringify(ledgerFields) === JSON.stringify(["trialConsumed", "trialEndsAt", "trialStartedAt"].sort()));
+
+  await seedStore("billing-invalid-ledger");
+  await db.doc("commercial_entitlements/billing-invalid-ledger").set({
+    trialConsumed: true,
+    trialStartedAt: dayOne,
+    trialEndsAt: Number.POSITIVE_INFINITY,
+  });
+  await assert.rejects(
+    ensureTrialStarted("billing-invalid-ledger", dayOne + DAY_MS),
+    /invalid_trial_ledger/,
+  );
+  check("N ledger invalido falha fechado sem conceder novo trial", true);
 
   // N (critico): store/redact real apaga o doc raiz (tombstone) mas o ledger
   // top-level sobrevive por construcao (purga so enumera subcolecoes de
@@ -192,6 +206,48 @@ async function main() {
   check("O nenhuma reserva de cota vazou para uma tentativa bloqueada",
     (expiredStoreAfter?.quotas?.dispatchesMonthReserved ?? 0) === 0);
 
+  const { claimWhatsappTestAttempt } = await import("../lib/whatsapp/testRateLimit.firestore");
+  check("O teste WhatsApp com trial expirado retorna 402 e nao chama provider",
+    JSON.stringify(await claimWhatsappTestAttempt("billing-dispatch-expired", dayOne + 30 * DAY_MS))
+      === JSON.stringify({ ok: false, status: 402, reason: "commercial_inactive" }));
+  check("O teste bloqueado nao consome janela de rate limit",
+    !(await db.doc("stores/billing-dispatch-expired/whatsapp_test_limits/global").get()).exists);
+
+  // P: enrollment/job e bloqueado na transacao, antes de reservar cota ou
+  // chegar ao dispatch final.
+  await seedStore("billing-enrollment-expired");
+  await ensureTrialStarted("billing-enrollment-expired", dayOne);
+  await db.doc("stores/billing-enrollment-expired/flows/cart-flow").set({
+    flowId: "cart-flow", name: "fixture", status: "active",
+    trigger: { event: "cart_abandoned", match: "all", conditions: [] },
+    steps: [{ delay: { value: 1, unit: "days" }, action: "email" }],
+    stats: { enrolled: 0, sent: 0, failed: 0 }, createdAt: dayOne,
+  });
+  const { enrollCartInFlows } = await import("../lib/rules/process");
+  const enrollmentsCreated = await enrollCartInFlows(
+    "billing-enrollment-expired",
+    { cartId: "cart-1", nsCheckoutId: "checkout-1", contactId: "contact-1", total: 1, items: [], recoveryUrl: null, createdAt: dayOne, abandonedAt: dayOne, status: "abandoned" },
+    { contactId: "contact-1", nsCustomerId: null, name: null, email: null, phone: null, tags: [], ordersCount: 0, totalSpent: 0, optOut: false, lastOrderAt: null },
+  );
+  check("P trial expirado cria zero enrollment/job", enrollmentsCreated === 0
+    && (await db.collection("stores/billing-enrollment-expired/enrollments").get()).empty
+    && (await db.collection("stores/billing-enrollment-expired/jobs").get()).empty);
+
+  // Q: job ja processing cruza a virada do trial; a guarda final observa o
+  // estado expirado e nao invoca o provider.
+  const { runWithFinalCommercialGuard } = await import("../lib/dispatch/finalGuard");
+  let providerCalls = 0;
+  const processingAtExpiry = await runWithFinalCommercialGuard(
+    async () => ({
+      storeActive: true,
+      commercialAccess: isCommercialAccessGranted(resolveCommercialState({ trialEndsAt: dayOne + TRIAL_DURATION_MS }, dayOne + TRIAL_DURATION_MS)),
+      jobProcessing: true,
+      enrollmentActive: true,
+    }),
+    async () => { providerCalls++; },
+  );
+  check("Q processing na virada bloqueia provider", processingAtExpiry.status === "blocked" && providerCalls === 0);
+
   // O (positivo): dentro do trial, o claim segue normalmente (nao bloqueia).
   await seedStore("billing-dispatch-active");
   await ensureTrialStarted("billing-dispatch-active", dayOne);
@@ -202,7 +258,7 @@ async function main() {
   const activeClaim = await claimJobForDispatch("billing-dispatch-active", "job-1", dayOne + 1 * DAY_MS, () => "res-2");
   check("O dentro do trial o claim e aceito normalmente", activeClaim.ok === true);
 
-  // P: a API tambem bloqueia (nao so o dispatch/worker) — ativar um fluxo com
+  // R: a API tambem bloqueia (nao so o dispatch/worker) — ativar um fluxo com
   // trial vencido falha com 402 real, sem depender de nenhuma checagem de UI.
   const { NextRequest } = await import("next/server");
   const { POST: flowsPost } = await import("../app/api/flows/route");

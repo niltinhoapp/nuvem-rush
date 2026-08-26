@@ -48,6 +48,7 @@ async function main() {
       const delivery = await runWithFinalCommercialGuard(
         async () => ({
           storeActive: true,
+          commercialAccess: true,
           jobProcessing: state.job === "processing",
           enrollmentActive: state.enrollment === "active",
         }),
@@ -75,7 +76,7 @@ async function main() {
     const providerDone = deferred();
     const state = { job: "processing", enrollment: "active", providerCalls: 0, quota: 0 };
     const deliveryPromise = runWithFinalCommercialGuard(
-      async () => ({ storeActive: true, jobProcessing: true, enrollmentActive: true }),
+      async () => ({ storeActive: true, commercialAccess: true, jobProcessing: true, enrollmentActive: true }),
       async () => {
         state.providerCalls++;
         providerStarted.resolve();

@@ -140,7 +140,13 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
           steps,
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        if (res.status === 402) {
+          setMsg("Seu período grátis terminou. Assine o plano para ativar automações.");
+          return;
+        }
+        throw new Error("Não foi possível salvar o fluxo.");
+      }
       setMsg(status === "active" ? "Fluxo ativado!" : "Rascunho salvo.");
     } catch (e) {
       setMsg("Erro ao salvar: " + String(e));

@@ -31,6 +31,8 @@ export async function POST(req: NextRequest) {
   if (!attempt.ok) {
     const error = attempt.reason === "store_inactive"
       ? "loja inativa"
+      : attempt.reason === "commercial_inactive"
+        ? "periodo gratis encerrado ou assinatura inativa"
       : attempt.reason === "cooldown"
         ? "aguarde antes de enviar outro teste"
         : "limite diario de testes atingido";

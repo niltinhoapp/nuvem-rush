@@ -26,7 +26,12 @@ export interface CommercialInput {
 // caminho de volta a trial_active — so uma assinatura paga muda o estado.
 export function resolveCommercialState(input: CommercialInput, now: number): CommercialState {
   if (input.subscriptionStatus === "active") return "paid_active";
-  if (typeof input.trialEndsAt === "number" && now < input.trialEndsAt) return "trial_active";
+  if (
+    Number.isFinite(now)
+    && typeof input.trialEndsAt === "number"
+    && Number.isFinite(input.trialEndsAt)
+    && now < input.trialEndsAt
+  ) return "trial_active";
   if (input.subscriptionStatus === "inactive") return "paid_inactive";
   return "trial_expired";
 }
@@ -36,6 +41,6 @@ export function isCommercialAccessGranted(state: CommercialState): boolean {
 }
 
 export function trialDaysRemaining(trialEndsAt: number | undefined, now: number): number {
-  if (typeof trialEndsAt !== "number") return 0;
+  if (!Number.isFinite(now) || typeof trialEndsAt !== "number" || !Number.isFinite(trialEndsAt)) return 0;
   return Math.max(0, Math.ceil((trialEndsAt - now) / (24 * 60 * 60 * 1000)));
 }
