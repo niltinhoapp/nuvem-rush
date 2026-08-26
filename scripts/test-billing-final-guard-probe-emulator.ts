@@ -86,7 +86,14 @@ async function main() {
     });
   }
 
-  const now = Date.UTC(2026, 7, 25, 12, 0, 0);
+  // dispatchJob chama claimJobForDispatch INTERNAMENTE sem receber `now`
+  // injetado (ele usa Date.now() real, por design de producao). Por isso
+  // este teste ancora em Date.now() real, nao numa data simulada fixa —
+  // caso contrario, o pre-filtro do claim (TTL de 26h) fica sujeito a
+  // "envelhecer" conforme o relogio real avanca entre execucoes deste
+  // arquivo, quebrando cenarios que dependem de um sinal "antigo mas ainda
+  // dentro do TTL de 26h" (ver ensureFreshCommercialAccess/claimJobForDispatch).
+  const now = Date.now();
 
   // A: 200 de 1s atras em cache + probe atual 402 => provider 0.
   await seedStore("probe-a");
