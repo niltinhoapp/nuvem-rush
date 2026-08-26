@@ -20,7 +20,7 @@ import {
   isOrderWebhookEvent,
 } from "@/lib/webhooks/inbox";
 import { firestoreWebhookInboxRepository } from "@/lib/webhooks/inbox.firestore";
-import { syncCommercialState, setBillingSuspended } from "@/lib/billing/sync.firestore";
+import { recordBillingAccessSignal } from "@/lib/billing/accessSignal.firestore";
 
 // Health check / verificacao de URL pelo painel da Nuvemshop (faz GET).
 export async function GET() {
@@ -96,29 +96,24 @@ export async function POST(req: NextRequest) {
        somente em memoria; delivery ocorre sob demanda no dashboard Nexo. */
 
     // ---- Billing V1 (Nuvemshop nativo) ----
-    // subscription/updated: payload e so um SINAL (concept_code/service_id/
-    // event_launch_ts) — nunca a fonte do estado. Sempre rebusca a Nuvemshop.
-    // Naturalmente idempotente: reprocessar o mesmo evento so refaz a mesma
-    // consulta e grava o mesmo resultado (sem ledger de dedup necessario).
-    // store_id ja foi validado por parseSignedWebhookRequest acima; loja
-    // inexistente/inativa e tratada dentro do proprio syncCommercialState
-    // (fail-closed, sem side-effect fora do tenant).
-    case "subscription/updated":
-      await syncCommercialState(storeId);
-      break;
-
-    // app/suspended e app/resumed: sinal DOCUMENTADO de suspensao por falta de
-    // pagamento (nao dispara para o esgotamento dos dias gratis). So altera a
-    // flag local; o proximo sync (aqui mesmo, em seguida) recalcula o estado
-    // combinando isso com o resultado real da Nuvemshop.
+    // app/suspended e app/resumed: UNICO webhook documentado de estado
+    // comercial (suspensao por falta de pagamento — nao dispara para o
+    // esgotamento dos "dias gratis", que so se revela via 402 numa chamada
+    // real, ver lib/billing/policy.ts). store_id ja validado acima por
+    // parseSignedWebhookRequest; loja com lifecycle inativo e ignorada
+    // dentro do proprio recordBillingAccessSignal (fail-closed, sem
+    // side-effect fora do tenant).
+    //
+    // subscription/updated NAO e tratado: dependia do endpoint de leitura de
+    // subscription por store, cujo contrato de selecao por store nunca foi
+    // documentado (ver policy.ts) — sem uma leitura provada para resincronizar,
+    // esse evento nao e acionavel e cai no `default` abaixo (logado, sem efeito).
     case "app/suspended":
-      await setBillingSuspended(storeId, true);
-      await syncCommercialState(storeId);
+      await recordBillingAccessSignal(storeId, true);
       break;
 
     case "app/resumed":
-      await setBillingSuspended(storeId, false);
-      await syncCommercialState(storeId);
+      await recordBillingAccessSignal(storeId, false);
       break;
 
     // ---- Pedidos -> motor de regras ----

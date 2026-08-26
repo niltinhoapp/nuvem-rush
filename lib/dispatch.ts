@@ -58,16 +58,17 @@ export async function claimJobForDispatch(
       }
       return { ok: false as const, reason: "loja inativa" };
     }
-    // Gate comercial (Billing V1): trial vencido sem assinatura ativa bloqueia
-    // o provider aqui, no mesmo ponto que ja bloqueia loja inativa — nao
-    // depende da UI. Cancelamento terminal (nao agenda retry): um bloqueio
-    // comercial permanente nao deve gerar tempestade de retries.
+    // Gate comercial (Billing V1): a Nuvemshop bloqueando o acesso desta loja
+    // (ou o estado sendo desconhecido) bloqueia o provider aqui, no mesmo
+    // ponto que ja bloqueia loja inativa — nao depende da UI. Cancelamento
+    // terminal (nao agenda retry): um bloqueio comercial nao deve gerar
+    // tempestade de retries.
     const commercial = resolveStoreCommercialState(storeSnap.data() as Store, now);
     if (!isCommercialAccessGranted(commercial)) {
       if (j.status === "scheduled") {
-        tx.update(jobRef, { status: "cancelled", cancelReason: "trial_expired" });
+        tx.update(jobRef, { status: "cancelled", cancelReason: "commercial_inactive" });
       }
-      return { ok: false as const, reason: "trial expirado" };
+      return { ok: false as const, reason: "acesso comercial bloqueado" };
     }
     if (!canClaim(j.status)) return { ok: false as const, reason: "ja processado" };
     const reservation = buildQuotaReservation(storeSnap.data() as Store, j, now);

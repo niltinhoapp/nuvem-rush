@@ -4,9 +4,10 @@
 // Protegido pelo CRON_SECRET.
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase/admin";
-import { NuvemshopClient } from "@/lib/nuvemshop/client";
+import { NuvemshopClient, NuvemshopApiError } from "@/lib/nuvemshop/client";
 import { syncAbandonedCheckout } from "@/lib/nuvemshop/carts";
 import { enrollCartOnce } from "@/lib/storefront/enrollCartOnce";
+import { recordBillingAccessSignal } from "@/lib/billing/accessSignal.firestore";
 import type { NsCheckout } from "@/lib/nuvemshop/types";
 import type { Store } from "@/types";
 
@@ -32,8 +33,17 @@ export async function GET(req: NextRequest) {
     try {
       const client = new NuvemshopClient(storeDoc.id, store.accessToken);
       checkouts = await client.listCheckouts();
-    } catch {
-      continue; // loja com token invalido / sem escopo: pula
+      // Sinal comercial (ver lib/billing/policy.ts): este cron roda 1x/dia
+      // para toda loja ativa — chamada real que, quando bem sucedida, PROVA
+      // acesso liberado e mantem a cache comercial dentro do TTL (26h) mesmo
+      // para lojas sem pedidos/webhooks no periodo.
+      await recordBillingAccessSignal(storeDoc.id, false);
+    } catch (error) {
+      if (error instanceof NuvemshopApiError && error.status === 402) {
+        // 402 PROVA bloqueio (falta de pagamento ou dias gratis esgotados).
+        await recordBillingAccessSignal(storeDoc.id, true);
+      }
+      continue; // loja com token invalido / sem escopo / erro: pula
     }
 
     for (const raw of checkouts) {

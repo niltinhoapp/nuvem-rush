@@ -1,11 +1,12 @@
 // Sincroniza pedidos e contatos da API Nuvemshop para o Firestore.
 // Enriquece cada item do pedido com categoria/marca (buscadas do produto, com cache).
 import { db, col, storeRef } from "@/lib/firebase/admin";
-import { NuvemshopClient } from "./client";
+import { NuvemshopClient, NuvemshopApiError } from "./client";
 import type { LocalizedString, NsOrder, NsProduct, NsTrackingInfo } from "./types";
 import type { Contact, Order, OrderItem, Product } from "@/types";
 import { findSuppressedContactId } from "@/lib/lgpd/firestore";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { recordBillingAccessSignal } from "@/lib/billing/accessSignal.firestore";
 
 function loc(value: LocalizedString | undefined): string {
   if (!value) return "";
@@ -141,9 +142,26 @@ export async function syncOrder(
   accessToken: string,
   nsOrderId: string,
   event: OrderEvent = "paid",
+  // Injetavel so para teste (fake HTTP) — nunca chamado com a API real nesta OS.
+  clientOptions: ConstructorParameters<typeof NuvemshopClient>[2] = {},
 ): Promise<{ order: Order; contact: Contact }> {
-  const client = new NuvemshopClient(storeId, accessToken);
-  const raw = await client.getOrder(nsOrderId);
+  const client = new NuvemshopClient(storeId, accessToken, clientOptions);
+  // Sinal comercial (ver lib/billing/policy.ts): esta e uma chamada real,
+  // autenticada com o token da loja. Um 200 PROVA que a Nuvemshop concede
+  // acesso agora; um 402 PROVA o oposto (documentado: cobre falta de
+  // pagamento e esgotamento dos dias gratis). Outros erros (timeout, 5xx,
+  // 401/403 de token invalido) sao ambiguos — nao mexem no sinal, so
+  // relancados para o tratamento de erro normal do chamador.
+  let raw: NsOrder;
+  try {
+    raw = await client.getOrder(nsOrderId);
+    await recordBillingAccessSignal(storeId, false);
+  } catch (error) {
+    if (error instanceof NuvemshopApiError && error.status === 402) {
+      await recordBillingAccessSignal(storeId, true);
+    }
+    throw error;
+  }
 
   const contact = await upsertContact(storeId, raw);
 

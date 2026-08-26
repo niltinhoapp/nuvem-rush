@@ -17,26 +17,20 @@ export interface Store {
   plan: Plan;
   status: "active" | "uninstalled" | "redacting" | "redacted";
   installedAt: number;
-  // Cache OPERACIONAL do estado comercial, sincronizada a partir do Billing
-  // nativo da Nuvemshop (fonte de verdade) por lib/billing/sync.firestore.ts.
-  // NAO e mais um ledger perpetuo local — sujeita a TTL
-  // (policy.ts::COMMERCIAL_CACHE_TTL_MS); cache velha demais sem resync vira
-  // billing_unknown (fail-closed), nunca "herda" paid_active as cegas.
-  // trialEndsAt so e populado quando a Nuvemshop confirma que a loja nunca
-  // teve assinatura (fallback local — ver lib/billing/trialFallback.firestore.ts).
-  trialStartedAt?: number;
-  trialEndsAt?: number;
-  // Ultima vez que a cache acima foi sincronizada com sucesso contra a
-  // Nuvemshop. Ausente/velha demais => resolveStoreCommercialState trata
-  // como billing_unknown (ver policy.ts).
+  // Cache OPERACIONAL do estado comercial (nao ha ledger local nenhum — ver
+  // lib/billing/policy.ts para o porque). Gravada por
+  // lib/billing/accessSignal.firestore.ts a partir de duas fontes 100%
+  // documentadas: os webhooks app/suspended|app/resumed, e o HTTP 402
+  // observado numa chamada real que ja fazemos a Nuvemshop com o token da
+  // loja (order sync, cron diario de carrinhos, registro de webhook no
+  // install). Sujeita a TTL (policy.ts::COMMERCIAL_CACHE_TTL_MS); velha
+  // demais sem novo sinal vira billing_unknown (fail-closed), nunca "herda"
+  // paid_active as cegas.
+  billingBlocked?: boolean;
+  // Ultima vez que um sinal comercial real foi observado (ver acima).
+  // Ausente/velho demais => resolveStoreCommercialState trata como
+  // billing_unknown (ver policy.ts).
   commercialSyncedAt?: number;
-  // Sinal do webhook documentado app/suspended (sem app/resumed desde entao).
-  // So se aplica quando ha assinatura encontrada na Nuvemshop.
-  billingSuspended?: boolean;
-  // Estado da assinatura paga (V1 = um unico plano pago), resolvido a partir
-  // do Billing nativo pelo sync — nunca setado por um fluxo de pagamento
-  // local (nao existe um aqui). Ver lib/billing/policy.ts.
-  subscriptionStatus?: "active" | "inactive";
   // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
   // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).
   // NAO preenchidos no OAuth; populados sob demanda pelo cron de sinais.

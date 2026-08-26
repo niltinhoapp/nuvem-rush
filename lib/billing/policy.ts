@@ -1,118 +1,71 @@
-// Politica comercial central (Billing V1 — Nuvemshop nativo).
+// Politica comercial central (Billing V1 — Nuvemshop nativo, CONTRATO PROVADO).
 //
-// Fonte de verdade: Billing da Nuvemshop (GET subscriptions) + o sinal
-// documentado de suspensao por falta de pagamento (app/suspended /
-// app/resumed). O trial local (fallback) so entra quando a Nuvemshop
-// confirma que NUNCA existiu assinatura para aquela loja+servico — nunca
-// por mera ausencia de cache nosso (ver lib/billing/sync.firestore.ts).
+// Correcao de uma OS anterior: a implementacao anterior lia
+// `GET /concepts/{concept_code}/services/{service_id}/subscriptions` como
+// fonte de verdade por store, usando um `?store_id=` inventado (nunca
+// documentado). Pesquisa oficial (tiendanube.github.io/api-documentation)
+// confirmou que esse endpoint NAO documenta nenhum parametro de selecao por
+// store, nem a autenticacao para GET subscriptions/charges (so Plans
+// documenta Partner-Action) — logo NAO pode ser usado como fonte de verdade
+// por store (ver ADR no relatorio da OS "BILLING_CONTRACT_REDACT_FIX_READY").
 //
-// Duas camadas PURAS, ambas testaveis isoladamente:
-//   1) resolveCommercialStateFromBilling — usada so pelo sync, decide o que
-//      GRAVAR no cache a partir da resposta da Nuvemshop.
-//   2) resolveStoreCommercialState — usada por TODOS os gates, le o cache
-//      ja gravado (Store.trialEndsAt/subscriptionStatus/commercialSyncedAt)
-//      e nunca confia numa leitura velha demais (TTL).
+// Fonte de verdade AGORA (100% documentada, verbatim confirmada em
+// https://tiendanube.github.io/api-documentation/intro#suspension-of-api-access-due-to-lack-of-payment):
+//   "In either case, all API calls will return a 402 Payment Required
+//   response [...] these webhooks [app/suspended, app/resumed] aren't
+//   triggered when the app runs out of 'free days'. In these cases the API
+//   will also be inaccessible, but no webhooks will be triggered."
 //
-// Fonte de tempo: SEMPRE o `now` passado pelo chamador (server-side) — nunca
-// um valor vindo do cliente/browser.
+// Ou seja: a UNICA prova documentada de estado comercial e (a) os webhooks
+// app/suspended / app/resumed (documentados, disparam so p/ falta de
+// pagamento) e (b) o proprio HTTP 402 observado em QUALQUER chamada real que
+// ja fazemos a API da Nuvemshop com o token da loja (order sync, cron de
+// carrinhos, registro de webhook no install) — cobre TAMBEM o esgotamento
+// dos "dias gratis", que o doc confirma tambem 402 sem webhook.
+//
+// Nao existe, documentado, um jeito de distinguir "dentro do trial" de
+// "pagando" — a Nuvemshop enforce os dois cenarios da MESMA forma (402 se
+// bloqueado, acesso liberado caso contrario) e os "dias gratis" sao
+// PORTAL_CONFIGURATION (Partner Portal), invisiveis via API. Por isso os
+// nomes paid_active/paid_inactive abaixo significam precisamente "a
+// Nuvemshop concede/nega acesso a API para esta loja agora" — nunca uma
+// confirmacao de pagamento especificamente (nao temos como afirmar isso).
+//
+// Fonte de tempo: SEMPRE o `now` passado pelo chamador (server-side).
 
-export const TRIAL_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
+export type CommercialState = "paid_active" | "paid_inactive" | "billing_unknown";
+
 // Cache operacional (Store.commercialSyncedAt) — nunca autoridade perpetua.
-// Passado o TTL sem resync, o gate trata como billing_unknown (fail-closed),
-// exceto quando o proprio trial local ainda comprovadamente nao venceu.
+// Refrescada a cada chamada real que ja fazemos a Nuvemshop com o token da
+// loja (order sync, cron diario de carrinhos, registro de webhook no
+// install) e pelos webhooks app/suspended|resumed. Passado o TTL sem
+// nenhuma dessas, o gate trata como billing_unknown (fail-closed) — nunca
+// herda o ultimo estado conhecido as cegas.
 export const COMMERCIAL_CACHE_TTL_MS = 26 * 60 * 60 * 1000;
 
-export type CommercialState =
-  | "trial_active"
-  | "trial_expired"
-  | "paid_active"
-  | "paid_inactive"
-  | "billing_unknown";
-
-export interface CommercialInput {
-  trialEndsAt?: number;
-  subscriptionStatus?: "active" | "inactive";
-}
-
-// Assinatura ativa sempre concede acesso, independente do trial (mesmo um
-// trial nunca iniciado/expirado). Sem assinatura ativa, o acesso depende
-// exclusivamente do trial ainda nao ter vencido. Uma vez expirado, nao ha
-// caminho de volta a trial_active — so uma assinatura paga muda o estado.
-export function resolveCommercialState(input: CommercialInput, now: number): CommercialState {
-  if (input.subscriptionStatus === "active") return "paid_active";
-  if (
-    Number.isFinite(now)
-    && typeof input.trialEndsAt === "number"
-    && Number.isFinite(input.trialEndsAt)
-    && now < input.trialEndsAt
-  ) return "trial_active";
-  if (input.subscriptionStatus === "inactive") return "paid_inactive";
-  return "trial_expired";
-}
-
-export interface StoreCommercialCache extends CommercialInput {
+export interface StoreCommercialCache {
+  // true = ultimo sinal PROVADO (webhook ou 402 observado) foi "bloqueado".
+  // false/ausente = ultimo sinal provado foi "acesso concedido".
+  billingBlocked?: boolean;
   commercialSyncedAt?: number;
 }
 
-// Usada por TODOS os gates (dispatch, ativacao de flow, criacao de
-// enrollment/job, teste de WhatsApp). Cache ausente/velha demais nunca
-// concede paid_active/paid_inactive "herdado" as cegas — so cai de volta
-// para trial_active se o proprio trial local ainda genuinamente nao venceu
-// (evita punir uma store cujo primeiro sync ainda nao rodou); caso
-// contrario, billing_unknown (fail-closed).
+// Usado por TODOS os gates (dispatch, ativacao de flow, criacao de
+// enrollment/job, teste de WhatsApp). Cache ausente/velha demais NUNCA
+// concede acesso as cegas — vira billing_unknown (fail-closed). Nao ha mais
+// um fallback de "trial local": nao existe contrato documentado que permita
+// distinguir trial de pagamento, entao nao fabricamos esse estado.
 export function resolveStoreCommercialState(store: StoreCommercialCache, now: number): CommercialState {
   const synced = store.commercialSyncedAt;
   const stale = typeof synced !== "number" || !Number.isFinite(synced)
     || !Number.isFinite(now) || now - synced > COMMERCIAL_CACHE_TTL_MS;
-  if (stale) {
-    if (
-      Number.isFinite(now)
-      && typeof store.trialEndsAt === "number"
-      && Number.isFinite(store.trialEndsAt)
-      && now < store.trialEndsAt
-    ) return "trial_active";
-    return "billing_unknown";
-  }
-  return resolveCommercialState(store, now);
+  if (stale) return "billing_unknown";
+  return store.billingBlocked === true ? "paid_inactive" : "paid_active";
 }
 
 // billing_unknown bloqueia efeito comercial (provider) mas os chamadores
 // continuam livres para permitir leitura/configuracao — essa funcao so
 // decide o gate de EFEITO real, nunca o de leitura.
 export function isCommercialAccessGranted(state: CommercialState): boolean {
-  return state === "trial_active" || state === "paid_active";
-}
-
-export function trialDaysRemaining(trialEndsAt: number | undefined, now: number): number {
-  if (!Number.isFinite(now) || typeof trialEndsAt !== "number" || !Number.isFinite(trialEndsAt)) return 0;
-  return Math.max(0, Math.ceil((trialEndsAt - now) / (24 * 60 * 60 * 1000)));
-}
-
-// --- Camada de sincronizacao (usada so por sync.firestore.ts) ---
-
-export type SubscriptionSignal = { kind: "found" } | { kind: "not_found" } | { kind: "unknown" };
-
-export interface LocalTrialFallback {
-  trialEndsAt?: number;
-}
-
-// `subscriptionFound` = existe (ou existiu) registro de assinatura na
-// Nuvemshop para esta loja+servico. `suspended` = ultimo sinal conhecido de
-// app/suspended sem app/resumed desde entao. O resto (dias gratis, cobranca
-// em si) e resolvido inteiramente pela Nuvemshop — nao replicamos aqui.
-export function resolveCommercialStateFromBilling(
-  billing: SubscriptionSignal,
-  suspended: boolean,
-  fallback: LocalTrialFallback,
-  now: number,
-): CommercialState {
-  if (billing.kind === "unknown") return "billing_unknown";
-  if (billing.kind === "found") return suspended ? "paid_inactive" : "paid_active";
-  if (
-    Number.isFinite(now)
-    && typeof fallback.trialEndsAt === "number"
-    && Number.isFinite(fallback.trialEndsAt)
-    && now < fallback.trialEndsAt
-  ) return "trial_active";
-  return "trial_expired";
+  return state === "paid_active";
 }

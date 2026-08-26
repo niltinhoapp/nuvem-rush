@@ -9,7 +9,7 @@ import {
   buildStoreInstallData,
   isFirstCommercialInstall,
 } from "@/lib/nuvemshop/store-install";
-import { syncCommercialState } from "@/lib/billing/sync.firestore";
+import { recordBillingAccessSignal } from "@/lib/billing/accessSignal.firestore";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -40,13 +40,6 @@ export async function GET(req: NextRequest) {
       { merge: !firstCommercialInstall },
     );
 
-    // Fonte de verdade = Billing da Nuvemshop. Roda DEPOIS do set acima (que
-    // pode substituir o doc raiz inteiro num reinstall pos-redact) para a
-    // cache comercial nao ser apagada em seguida. NUNCA assume trial novo so
-    // porque o doc acabou de ser (re)criado — resolve consultando a
-    // Nuvemshop; so cai no fallback local se ela confirmar not_found.
-    await syncCommercialState(storeId);
-
     // Registra os webhooks obrigatorios apontando para o nosso receiver.
     const client = new NuvemshopClient(storeId, token.access_token);
     const webhookUrl = `${process.env.APP_BASE_URL}/api/webhooks/nuvemshop`;
@@ -64,6 +57,20 @@ export async function GET(req: NextRequest) {
         failures: safeFailures,
       },
     }, { merge: true });
+
+    // Sinal comercial (Billing V1 — ver lib/billing/policy.ts): a chamada
+    // real acima ja PROVA se a Nuvemshop concede acesso a API para esta
+    // loja agora. Sucesso total = acesso liberado. Um 402 entre as falhas =
+    // bloqueado (documentado: 402 cobre tanto falta de pagamento quanto
+    // esgotamento dos dias gratis). Outras falhas (timeout/5xx) sao
+    // ambiguas — nao gravamos nada, o proximo sinal real decide (fail-closed
+    // por staleness, nunca por um chute aqui).
+    const has402 = failures.some((f) => f.httpStatus === 402);
+    if (failures.length === 0) {
+      await recordBillingAccessSignal(storeId, false);
+    } else if (has402) {
+      await recordBillingAccessSignal(storeId, true);
+    }
 
     if (failures.length > 0) {
       console.warn("[oauth] registro de webhooks incompleto", safeFailures);

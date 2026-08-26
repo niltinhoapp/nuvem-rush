@@ -57,9 +57,7 @@ export default function DashboardPage() {
     sending: false,
     msg: "",
   });
-  const [billing, setBilling] = useState<
-    { state: CommercialState; trialEndsAt: number | null; trialDaysRemaining: number } | null
-  >(null);
+  const [billing, setBilling] = useState<{ state: CommercialState } | null>(null);
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -86,11 +84,7 @@ export default function DashboardPage() {
         const r = await fetch("/api/billing/status", { headers: { Authorization: `Bearer ${token}` } });
         if (!r.ok) throw new Error(`status ${r.status}`);
         const data = await r.json();
-        setBilling({
-          state: data.state,
-          trialEndsAt: data.trialEndsAt ?? null,
-          trialDaysRemaining: data.trialDaysRemaining ?? 0,
-        });
+        setBilling({ state: data.state });
       })
       .catch((e) => console.error("Falha ao checar status comercial:", e));
   };
@@ -225,52 +219,37 @@ function PageHeader() {
   );
 }
 
-// Card comercial (Billing V1): mostra o periodo gratis restante ou o estado
-// da assinatura. Sem preco fixo aqui de proposito — nao ha integracao de
-// pagamento ainda (ver relatorio da OS); so a mensagem de estado.
+// Card comercial (Billing V1 — Nuvemshop nativo): mostra se a Nuvemshop esta
+// concedendo acesso agora. NAO afirma "assinatura em dia" nem mostra preco
+// vinculado a um pagamento confirmado — nao ha, documentado, como distinguir
+// "dentro do periodo gratis" de "pagando" (ver lib/billing/policy.ts). O
+// periodo gratis (14 dias) e a cobranca em si sao geridos pela propria
+// Nuvemshop; este card so reflete se ela esta liberando o uso.
 function BillingStatusCard({
   billing,
 }: {
-  billing: { state: CommercialState; trialEndsAt: number | null; trialDaysRemaining: number };
+  billing: { state: CommercialState };
 }) {
-  const formattedEnd = billing.trialEndsAt
-    ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(new Date(billing.trialEndsAt))
-    : null;
-
   const { title, description, appearance } = (() => {
     switch (billing.state) {
-      case "trial_active":
-        return {
-          title: "Período grátis",
-          description: `${billing.trialDaysRemaining} dia(s) restante(s)${formattedEnd ? ` — termina em ${formattedEnd}` : ""}.`,
-          appearance: "success" as const,
-        };
       case "paid_active":
         return {
-          title: "Plano ativo",
-          // Preco vem so de PLANS.essencial (fonte real do repo) — nunca um
-          // valor livre, para nunca mostrar um preco que nao existe de fato.
-          description: `Sua assinatura do plano ${PLANS.essencial.label} (R$ ${PLANS.essencial.priceBRL.toFixed(2).replace(".", ",")}/mês) está em dia.`,
+          title: "Acesso liberado",
+          description: `Seu plano ${PLANS.essencial.label} está liberado pela Nuvemshop (período grátis ou assinatura em dia).`,
           appearance: "success" as const,
         };
       case "paid_inactive":
         return {
-          title: "Assinatura inativa",
-          description: "Seu período grátis já foi usado e a assinatura não está ativa. Automações estão pausadas.",
+          title: "Acesso bloqueado pela Nuvemshop",
+          description: "A Nuvemshop pausou o acesso deste app (pagamento pendente ou período grátis encerrado). Regularize pelo painel da Nuvemshop para retomar as automações.",
           appearance: "danger" as const,
         };
       case "billing_unknown":
-        return {
-          title: "Não foi possível confirmar seu plano agora",
-          description: "Estamos com uma instabilidade temporária para confirmar sua assinatura. Isso não afeta automações já em andamento; tente novamente em alguns minutos.",
-          appearance: "warning" as const,
-        };
-      case "trial_expired":
       default:
         return {
-          title: "Seu período grátis terminou",
-          description: "Assine o plano para continuar enviando automações.",
-          appearance: "danger" as const,
+          title: "Não foi possível confirmar seu acesso agora",
+          description: "Estamos com uma instabilidade temporária para confirmar seu acesso. Isso não afeta automações já em andamento; tente novamente em alguns minutos.",
+          appearance: "warning" as const,
         };
     }
   })();

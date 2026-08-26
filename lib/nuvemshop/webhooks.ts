@@ -14,13 +14,18 @@ export const REQUIRED_WEBHOOK_EVENTS = [
   "app/uninstalled",
 ] as const;
 
-// Billing V1 (Nuvemshop nativo): subscription/updated, app/suspended e
-// app/resumed sao processados em app/api/webhooks/nuvemshop/route.ts, mas
-// NAO sao auto-registrados aqui — assim como os eventos LGPD acima, o padrao
-// observado neste repo (e a natureza destes eventos, ligados ao Billing do
-// parceiro, nao a uma store isolada) e de configuracao no painel de
-// Parceiros, nao via POST /webhooks por store. PORTAL_CONFIGURATION:
-// confirmar/ativar no Partner Portal antes do deploy (ver relatorio da OS).
+// Billing V1 (Nuvemshop nativo): app/suspended e app/resumed sao processados
+// em app/api/webhooks/nuvemshop/route.ts, mas NAO sao auto-registrados aqui —
+// assim como os eventos LGPD acima, o padrao observado neste repo (e a
+// natureza destes eventos, documentados como ligados ao Billing do parceiro,
+// nao a uma store isolada) e de configuracao no painel de Parceiros, nao via
+// POST /webhooks por store. PORTAL_CONFIGURATION: confirmar/ativar no
+// Partner Portal antes do deploy (ver relatorio da OS).
+//
+// subscription/updated NAO e usado (ver lib/billing/policy.ts): dependia do
+// endpoint de leitura de subscription por store, cujo contrato de selecao
+// por store nunca foi documentado — sem uma leitura provada, o evento nao e
+// acionavel.
 
 export function verifyHmac(rawBody: string, signature: string | null): boolean {
   if (!signature) return false;
