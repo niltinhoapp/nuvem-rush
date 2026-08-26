@@ -1,7 +1,9 @@
 import { db } from "@/lib/firebase/admin";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
+  catalogTemplateKeyForStoredIdentity,
   canApplyTemplateStatusUpdate,
+  storedCatalogTemplate,
   type MetaTemplateStatusUpdate,
 } from "./templateStatus";
 import type { Store } from "@/types";
@@ -28,19 +30,26 @@ export async function updateTemplateStatus(
     const storeSnap = await tx.get(ref);
     const store = storeSnap.data() as Store | undefined;
     const whatsapp = store?.whatsapp;
+    const key = catalogTemplateKeyForStoredIdentity(whatsapp, update.name, update.language);
+    const template = key ? storedCatalogTemplate(whatsapp, key) : undefined;
     if (!store || !canApplyTemplateStatusUpdate({
       storeActive: isStoreCommerciallyActive(store.status),
-      whatsapp,
-      wabaId: update.wabaId,
-      name: update.name,
-      language: update.language,
+      template,
       receivedAt: update.receivedAt,
     })) return "ignored_store_or_template_mismatch";
 
-    tx.update(ref, {
-      "whatsapp.templateStatus": update.status,
-      "whatsapp.templateStatusUpdatedAt": update.receivedAt,
-    });
+    if (whatsapp?.wabaId !== update.wabaId || !key) return "ignored_store_or_template_mismatch";
+    if (!whatsapp.templates && key === "pos_venda_agradecimento") {
+      tx.update(ref, {
+        "whatsapp.templateStatus": update.status,
+        "whatsapp.templateStatusUpdatedAt": update.receivedAt,
+      });
+    } else {
+      tx.update(ref, {
+        [`whatsapp.templates.${key}.status`]: update.status,
+        [`whatsapp.templates.${key}.statusUpdatedAt`]: update.receivedAt,
+      });
+    }
     return "updated";
   });
 }

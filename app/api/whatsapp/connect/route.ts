@@ -12,11 +12,10 @@ import {
   exchangeCodeForToken,
   subscribeAppToWaba,
   registerPhoneNumber,
-  createDefaultTemplate,
-  getDefaultTemplateStatus,
-  DEFAULT_TEMPLATE_NAME,
-  DEFAULT_TEMPLATE_LANG,
+  provisionCatalogTemplates,
 } from "@/lib/whatsapp/embedded";
+import { WHATSAPP_TEMPLATE_CATALOG_KEYS } from "@/lib/whatsapp/catalog";
+import { storedCatalogTemplate } from "@/lib/whatsapp/templateStatus";
 import type { Store, StoreWhatsapp } from "@/types";
 
 export async function GET(req: NextRequest) {
@@ -28,8 +27,15 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     connected: wa?.status === "connected",
     phoneNumberId: wa?.phoneNumberId ?? null,
-    templateName: wa?.templateName ?? null,
-    templateStatus: wa?.templateStatus ?? null,
+    templates: Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
+      const template = storedCatalogTemplate(wa, key);
+      return [key, template ? {
+        name: template.name,
+        language: template.language,
+        status: template.status,
+        statusUpdatedAt: template.statusUpdatedAt ?? null,
+      } : null];
+    })),
   });
 }
 
@@ -74,47 +80,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Template padrao de pos-venda na conta DELE (best effort: se falhar,
-    //    a conexao vale mesmo assim e o lojista cria depois pela UI da Meta).
-    let templateOk = false;
-    let templateStatus: StoreWhatsapp["templateStatus"];
-    try {
-      const created = await createDefaultTemplate(body.wabaId, accessToken);
-      templateOk = true;
-      templateStatus = created.status;
-      if (created.alreadyExisted) {
-        try {
-          // Reconexao nao pressupoe aprovacao: so libera o envio se a leitura
-          // atual da Meta confirmar explicitamente APPROVED.
-          templateStatus = await getDefaultTemplateStatus(body.wabaId, accessToken);
-        } catch (err) {
-          console.warn("[whatsapp connect] template status lookup failed", {
-            storeId,
-            errorName: err instanceof Error ? err.name : "unknown",
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("[whatsapp connect] template creation failed", {
-        storeId,
-        errorName: err instanceof Error ? err.name : "unknown",
-      });
-    }
+    // 3. Catálogo fechado, criado sequencialmente na WABA do lojista. Uma
+    // falha isolada não impede os demais itens e nunca vira APPROVED por
+    // inferência; item sem leitura confiável fica PENDING.
+    const templates = await provisionCatalogTemplates(body.wabaId, accessToken);
 
     const whatsapp: StoreWhatsapp = {
       wabaId: body.wabaId,
       phoneNumberId: body.phoneNumberId,
       accessToken, // TODO: criptografar em repouso (KMS)
       status: "connected",
-      ...(templateOk
-        ? {
-          templateName: DEFAULT_TEMPLATE_NAME,
-          templateLang: DEFAULT_TEMPLATE_LANG,
-          ...(templateStatus
-            ? { templateStatus, templateStatusUpdatedAt: Date.now() }
-            : {}),
-        }
-        : {}),
+      ...(Object.keys(templates).length > 0 ? { templates } : {}),
       connectedAt: Date.now(),
       tokenRefreshedAt: Date.now(),
     };
@@ -129,8 +105,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       connected: true,
-      templateCreated: templateOk,
-      templateStatus: templateStatus ?? null,
+      templates: Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => [
+        key,
+        templates[key]?.status ?? null,
+      ])),
     });
   } catch (err) {
     console.error("[whatsapp connect] failed", {

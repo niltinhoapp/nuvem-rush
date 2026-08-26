@@ -1,69 +1,56 @@
-import type { StoreWhatsapp, WhatsappTemplateStatus } from "@/types";
+import { findCatalogTemplateByIdentity, getCatalogTemplate, type TemplateCatalogKey } from "./catalog";
+import type { StoreWhatsapp, WhatsappCatalogTemplate, WhatsappTemplateStatus } from "@/types";
 
 export const TEMPLATE_NOT_APPROVED_ERROR = "whatsapp_template_not_approved";
-
-export type MetaTemplateStatusUpdate = {
-  wabaId: string;
-  name: string;
-  language: string;
-  status: WhatsappTemplateStatus;
-  receivedAt: number;
-};
+export type MetaTemplateStatusUpdate = { wabaId: string; name: string; language: string; status: WhatsappTemplateStatus; receivedAt: number };
 
 export function normalizeTemplateStatus(value: unknown): WhatsappTemplateStatus | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toUpperCase();
   return normalized || undefined;
 }
+export function isTemplateApproved(status: WhatsappTemplateStatus | undefined): boolean { return status === "APPROVED"; }
+export function initialTemplateStatus(value: unknown): WhatsappTemplateStatus { return normalizeTemplateStatus(value) ?? "PENDING"; }
 
-export function isTemplateApproved(status: WhatsappTemplateStatus | undefined): boolean {
-  return status === "APPROVED";
+type WhatsappTemplateState = Pick<StoreWhatsapp, "wabaId" | "templateName" | "templateLang" | "templateStatus" | "templateStatusUpdatedAt" | "templates">;
+
+// Compatibilidade apenas de leitura: um documento legado só representa o
+// template canônico de pós-venda e nunca recebe migração automática.
+export function legacyPostSaleTemplate(whatsapp: WhatsappTemplateState | undefined): WhatsappCatalogTemplate | undefined {
+  if (!whatsapp || whatsapp.templates) return undefined;
+  const postSale = getCatalogTemplate("pos_venda_agradecimento");
+  if (whatsapp.templateName !== postSale.name || whatsapp.templateLang !== postSale.language) return undefined;
+  return {
+    name: whatsapp.templateName,
+    language: whatsapp.templateLang,
+    status: whatsapp.templateStatus ?? "PENDING",
+    ...(typeof whatsapp.templateStatusUpdatedAt === "number" ? { statusUpdatedAt: whatsapp.templateStatusUpdatedAt } : {}),
+  };
 }
 
-export function initialTemplateStatus(value: unknown): WhatsappTemplateStatus {
-  return normalizeTemplateStatus(value) ?? "PENDING";
+export function storedCatalogTemplate(whatsapp: WhatsappTemplateState | undefined, key: TemplateCatalogKey): WhatsappCatalogTemplate | undefined {
+  return whatsapp?.templates?.[key] ?? (key === "pos_venda_agradecimento" ? legacyPostSaleTemplate(whatsapp) : undefined);
 }
 
-export function sameTemplate(
-  whatsapp: Pick<StoreWhatsapp, "templateName" | "templateLang">,
-  name: string,
-  language: string,
-): boolean {
-  return whatsapp.templateName === name && whatsapp.templateLang === language;
+export function catalogTemplateKeyForStoredIdentity(whatsapp: WhatsappTemplateState | undefined, name: string, language: string): TemplateCatalogKey | undefined {
+  const catalog = findCatalogTemplateByIdentity(name, language);
+  if (!catalog) return undefined;
+  const stored = storedCatalogTemplate(whatsapp, catalog.key);
+  return stored?.name === name && stored.language === language ? catalog.key : undefined;
 }
 
-export function assertCommercialTemplateApproved(params: {
-  whatsapp: Pick<StoreWhatsapp, "templateName" | "templateLang" | "templateStatus">;
-  name: string;
-  language: string;
-}): void {
-  if (!sameTemplate(params.whatsapp, params.name, params.language)) {
+export function assertCommercialTemplateApproved(params: { whatsapp: WhatsappTemplateState | undefined; key: TemplateCatalogKey }): WhatsappCatalogTemplate {
+  const expected = getCatalogTemplate(params.key);
+  const stored = storedCatalogTemplate(params.whatsapp, params.key);
+  if (!stored || stored.name !== expected.name || stored.language !== expected.language || !isTemplateApproved(stored.status)) {
     throw new Error(TEMPLATE_NOT_APPROVED_ERROR);
   }
-  if (!isTemplateApproved(params.whatsapp.templateStatus)) {
-    throw new Error(TEMPLATE_NOT_APPROVED_ERROR);
-  }
+  return stored;
 }
 
-export function canApplyTemplateStatusUpdate(params: {
-  storeActive: boolean;
-  whatsapp: Pick<StoreWhatsapp, "wabaId" | "templateName" | "templateLang" | "templateStatusUpdatedAt"> | undefined;
-  wabaId: string;
-  name: string;
-  language: string;
-  receivedAt: number;
-}): boolean {
-  const whatsapp = params.whatsapp;
-  return !!whatsapp
-    && params.storeActive
-    && whatsapp.wabaId === params.wabaId
-    && sameTemplate(whatsapp, params.name, params.language)
-    // entry.time tem precisao em segundos. Um evento com o mesmo timestamp ja
-    // aplicado e uma reentrega (ou uma ordem que a Meta nao permite resolver);
-    // nao o regravamos. Isso torna a atualizacao estritamente monotona e evita
-    // que duplicatas concorrentes disputem uma escrita desnecessaria.
-    && (typeof whatsapp.templateStatusUpdatedAt !== "number"
-      || whatsapp.templateStatusUpdatedAt < params.receivedAt);
+export function canApplyTemplateStatusUpdate(params: { storeActive: boolean; template: WhatsappCatalogTemplate | undefined; receivedAt: number }): boolean {
+  return params.storeActive && !!params.template
+    && (typeof params.template.statusUpdatedAt !== "number" || params.template.statusUpdatedAt < params.receivedAt);
 }
 
 function webhookTimeMs(value: unknown): number {
@@ -75,27 +62,11 @@ export function parseMetaTemplateStatusUpdate(entry: unknown, change: unknown): 
   if (!entry || typeof entry !== "object" || !change || typeof change !== "object") return null;
   const currentEntry = entry as { id?: unknown; time?: unknown };
   const currentChange = change as { field?: unknown; value?: unknown };
-  if (currentChange.field !== "message_template_status_update") return null;
-  if (!currentChange.value || typeof currentChange.value !== "object") return null;
-  const value = currentChange.value as {
-    event?: unknown;
-    message_template_name?: unknown;
-    message_template_language?: unknown;
-  };
+  if (currentChange.field !== "message_template_status_update" || !currentChange.value || typeof currentChange.value !== "object") return null;
+  const value = currentChange.value as { event?: unknown; message_template_name?: unknown; message_template_language?: unknown };
   const status = normalizeTemplateStatus(value.event);
-  if (
-    typeof currentEntry.id !== "string"
-    || typeof value.message_template_name !== "string"
-    || typeof value.message_template_language !== "string"
-    || !status
-  ) return null;
-  return {
-    wabaId: currentEntry.id,
-    name: value.message_template_name,
-    language: value.message_template_language,
-    status,
-    receivedAt: webhookTimeMs(currentEntry.time),
-  };
+  if (typeof currentEntry.id !== "string" || typeof value.message_template_name !== "string" || typeof value.message_template_language !== "string" || !status) return null;
+  return { wabaId: currentEntry.id, name: value.message_template_name, language: value.message_template_language, status, receivedAt: webhookTimeMs(currentEntry.time) };
 }
 
 export function templateStatusLabel(status: WhatsappTemplateStatus | undefined): string {

@@ -1,4 +1,5 @@
 // Tipos centrais do dominio. Espelham as colecoes do Firestore.
+import type { TemplateCatalogKey } from "@/lib/whatsapp/catalog";
 
 export type Plan = "essencial" | "crescimento" | "turbo";
 
@@ -53,6 +54,8 @@ export interface StoreWhatsapp {
   // Qualquer valor diferente de APPROVED bloqueia envio comercial.
   templateStatus?: WhatsappTemplateStatus;
   templateStatusUpdatedAt?: number;
+  // Catálogo fechado e aditivo. Instalações legadas permanecem sem migração.
+  templates?: Partial<Record<TemplateCatalogKey, WhatsappCatalogTemplate>>;
   connectedAt: number;
   // O token da config do Embedded Signup expira em 60 dias; o cron
   // /api/cron/refresh-whatsapp-tokens renova mensalmente via fb_exchange_token.
@@ -61,6 +64,13 @@ export interface StoreWhatsapp {
   lastRefreshError?: string | null;
   lastRefreshAttempt?: number;
   refreshFailCount?: number;
+}
+
+export interface WhatsappCatalogTemplate {
+  name: string;
+  language: string;
+  status: WhatsappTemplateStatus;
+  statusUpdatedAt?: number;
 }
 
 // A Meta pode adicionar eventos sem aviso. Preservamos o valor normalizado e

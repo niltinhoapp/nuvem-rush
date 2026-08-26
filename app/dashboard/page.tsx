@@ -16,6 +16,7 @@ import {
 import { ErrorBoundary } from "@tiendanube/nexo";
 import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
 import { templateStatusLabel } from "@/lib/whatsapp/templateStatus";
+import { WHATSAPP_TEMPLATE_CATALOG_KEYS, getCatalogTemplate, type TemplateCatalogKey } from "@/lib/whatsapp/catalog";
 import type { Flow } from "@/types";
 
 type ConnectionStatus = "loading" | "ready" | "error";
@@ -48,8 +49,7 @@ export default function DashboardPage() {
   const [wa, setWa] = useState<{
     connected: boolean;
     phoneNumberId: string | null;
-    templateName: string | null;
-    templateStatus: string | null;
+    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
   } | null>(null);
   const [testState, setTestState] = useState<{ sending: boolean; msg: string }>({
     sending: false,
@@ -83,8 +83,7 @@ export default function DashboardPage() {
         setWa({
           connected: !!data.connected,
           phoneNumberId: data.phoneNumberId ?? null,
-          templateName: data.templateName ?? null,
-          templateStatus: data.templateStatus ?? null,
+          templates: data.templates && typeof data.templates === "object" ? data.templates : {},
         });
       })
       .catch((e) => console.error("Falha ao checar status do WhatsApp:", e));
@@ -217,8 +216,7 @@ function WhatsappStatusCard({
   wa: {
     connected: boolean;
     phoneNumberId: string | null;
-    templateName: string | null;
-    templateStatus: string | null;
+    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
   } | null;
   onConnect: () => void;
   onRefresh: () => void;
@@ -263,14 +261,18 @@ function WhatsappStatusCard({
 
           {connected && (
             <Box display="flex" flexDirection="column" gap="1">
+              {WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
+                const catalog = getCatalogTemplate(key);
+                const status = wa?.templates[key]?.status;
+                return (
+                  <Text key={key} fontSize="caption" color="neutral-textLow">
+                    {catalog.label}: {templateStatusLabel(status)}
+                  </Text>
+                );
+              })}
               <Text fontSize="caption" color="neutral-textLow">
-                Template padrão: {templateStatusLabel(wa?.templateStatus ?? undefined)}
+                Cada automação só envia após a aprovação do respectivo template pela Meta.
               </Text>
-              {wa?.templateStatus !== "APPROVED" && (
-                <Text fontSize="caption" color="neutral-textLow">
-                  As automações de WhatsApp só enviarão após a aprovação do template pela Meta.
-                </Text>
-              )}
             </Box>
           )}
 
