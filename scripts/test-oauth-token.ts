@@ -14,13 +14,48 @@ const officialResponse = {
 
 assert.deepEqual(parseNuvemshopTokenResponse(officialResponse), officialResponse);
 
+// user_id como STRING numerica: a doc oficial
+// (tiendanube.github.io/api-documentation/authentication) mostra o exemplo
+// real como `"user_id": "789"` — string, nao number. Achado real ao
+// homologar (NuvemshopOAuthResponseError em producao) confirmou que a API
+// realmente devolve string. Normaliza para number, nunca relaxa o resto.
+for (const [userId, expectedNormalized] of [
+  ["7865512", 7_865_512],
+  ["1", 1],
+  ["007", 7], // zeros a esquerda ainda sao um inteiro positivo valido
+  ["999999999999999", 999_999_999_999_999], // 15 digitos, dentro de MAX_SAFE_INTEGER
+] as const) {
+  assert.deepEqual(
+    parseNuvemshopTokenResponse({ ...officialResponse, user_id: userId }),
+    { ...officialResponse, user_id: expectedNormalized },
+    `user_id string "${userId}" deveria normalizar para ${expectedNormalized}`,
+  );
+}
+
 for (const invalidResponse of [
   { ...officialResponse, access_token: undefined },
   { ...officialResponse, access_token: "" },
   { ...officialResponse, access_token: "   " },
   { ...officialResponse, user_id: undefined },
-  { ...officialResponse, user_id: "7865512" },
+  { ...officialResponse, user_id: null },
   { ...officialResponse, user_id: 0 },
+  { ...officialResponse, user_id: "0" },
+  { ...officialResponse, user_id: -1 },
+  { ...officialResponse, user_id: "-1" },
+  { ...officialResponse, user_id: 1.5 },
+  { ...officialResponse, user_id: "1.5" },
+  { ...officialResponse, user_id: "" },
+  { ...officialResponse, user_id: "   " },
+  { ...officialResponse, user_id: "abc" },
+  { ...officialResponse, user_id: "7865512abc" },
+  { ...officialResponse, user_id: "abc7865512" },
+  { ...officialResponse, user_id: "1e10" }, // notacao cientifica: rejeitada, nao e so digitos
+  { ...officialResponse, user_id: "9999999999999999" }, // 16 digitos: > MAX_SAFE_INTEGER
+  { ...officialResponse, user_id: Number.MAX_SAFE_INTEGER + 1 },
+  { ...officialResponse, user_id: Number.NaN },
+  { ...officialResponse, user_id: Number.POSITIVE_INFINITY },
+  { ...officialResponse, user_id: [7_865_512] },
+  { ...officialResponse, user_id: { id: 7_865_512 } },
   { ...officialResponse, scope: undefined },
   { ...officialResponse, scope: ["read_orders", "write_webhooks"] },
   { error: "invalid_grant", error_description: "invalid authorization code" },
@@ -29,6 +64,7 @@ for (const invalidResponse of [
   assert.throws(
     () => parseNuvemshopTokenResponse(invalidResponse),
     NuvemshopOAuthResponseError,
+    `deveria rejeitar: ${JSON.stringify(invalidResponse)}`,
   );
 }
 
@@ -90,6 +126,12 @@ try {
   const valid = await exchangeThenPersist(officialResponse);
   assert.equal(valid.writes, 1);
   assert.equal(valid.token?.access_token, officialResponse.access_token);
+
+  // Ponta a ponta com o formato real da Nuvemshop (user_id como string) —
+  // o caso que causava "falha na instalacao" em producao antes desta correcao.
+  const validStringUserId = await exchangeThenPersist({ ...officialResponse, user_id: "7865512" });
+  assert.equal(validStringUserId.writes, 1, "user_id string deve completar a troca normalmente");
+  assert.equal(validStringUserId.token?.user_id, 7_865_512, "normaliza para number");
 
   for (const response of [
     { ...officialResponse, access_token: undefined },

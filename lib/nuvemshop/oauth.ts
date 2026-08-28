@@ -17,6 +17,21 @@ export class NuvemshopOAuthResponseError extends Error {
   }
 }
 
+// A doc oficial (tiendanube.github.io/api-documentation/authentication)
+// mostra `user_id` como STRING no JSON de resposta (ex.: "user_id": "789"),
+// nao number. Aceita os dois formatos e normaliza para number — nunca
+// relaxa a validacao em si (so o tipo de origem aceito).
+function parseUserId(userId: unknown): number | null {
+  if (typeof userId === "number") {
+    return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
+  }
+  if (typeof userId === "string" && /^[0-9]{1,15}$/.test(userId)) {
+    const parsed = Number(userId);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
 export function parseNuvemshopTokenResponse(value: unknown): NuvemshopToken {
   if (!value || typeof value !== "object") {
     throw new NuvemshopOAuthResponseError();
@@ -26,14 +41,12 @@ export function parseNuvemshopTokenResponse(value: unknown): NuvemshopToken {
   const accessToken = typeof response.access_token === "string"
     ? response.access_token.trim()
     : "";
-  const userId = response.user_id;
+  const userId = parseUserId(response.user_id);
   const scope = response.scope;
 
   if (
     !accessToken
-    || typeof userId !== "number"
-    || !Number.isSafeInteger(userId)
-    || userId <= 0
+    || userId === null
     || typeof scope !== "string"
   ) {
     throw new NuvemshopOAuthResponseError();
