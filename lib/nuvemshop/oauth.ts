@@ -96,5 +96,31 @@ export async function exchangeCodeForToken(code: string): Promise<NuvemshopToken
     throw new NuvemshopOAuthResponseError();
   }
 
+  // DIAGNOSTICO TEMPORARIO (remover apos identificar a causa real do
+  // NuvemshopOAuthResponseError em homologacao). NUNCA loga access_token,
+  // client_secret, code ou o header Authorization — so tipos/estrutura
+  // sanitizados. user_id pode aparecer em claro: e so o id da loja.
+  if (payload && typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    console.log("[oauth-diag] resposta do token Nuvemshop (sanitizada)", {
+      httpStatus: res.status,
+      payloadType: typeof payload,
+      keys: Object.keys(p),
+      accessTokenPresent: "access_token" in p,
+      accessTokenType: typeof p.access_token,
+      userIdType: typeof p.user_id,
+      userIdValueSanitized: p.user_id,
+      scopeType: typeof p.scope,
+      scopePresent: "scope" in p,
+      tokenType: typeof p.token_type,
+      tokenTypeValue: typeof p.token_type === "string" ? p.token_type : undefined,
+    });
+  } else {
+    console.log("[oauth-diag] resposta do token Nuvemshop nao e um objeto", {
+      httpStatus: res.status,
+      payloadType: typeof payload,
+    });
+  }
+
   return parseNuvemshopTokenResponse(payload);
 }
