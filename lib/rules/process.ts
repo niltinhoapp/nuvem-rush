@@ -226,6 +226,7 @@ async function enrollInFlows(
 
   for (const doc of flowsSnap.docs) {
     const flow = doc.data() as Flow;
+    if (flow.deletedAt) continue; // soft-deletado: nao aceita novas inscricoes
     if (!matches(flow.trigger, ctx)) continue;
     await createEnrollmentWithJobs(storeId, flow, contact.contactId, { orderId: order.orderId }, doc.ref);
   }
@@ -253,6 +254,7 @@ export async function enrollCartInFlows(
   let created = 0;
   for (const doc of flowsSnap.docs) {
     const flow = doc.data() as Flow;
+    if (flow.deletedAt) continue; // soft-deletado: nao aceita novas inscricoes
     if (!matches(flow.trigger, ctx)) continue;
     const isNew = await createEnrollmentWithJobs(storeId, flow, contact.contactId, { cartId: cart.cartId }, doc.ref);
     if (isNew) created++;

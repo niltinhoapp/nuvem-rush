@@ -181,7 +181,26 @@ export async function dispatchJob(
   }
 
   const flow = (await col(storeId, "flows").doc(job.flowId).get()).data() as Flow | undefined;
-  const step = flow?.steps[job.stepIndex];
+
+  // Defesa explicita de ciclo de vida do fluxo — nao depende do filtro feito
+  // no momento da inscricao: um fluxo pausado/excluido DEPOIS de o job ter
+  // sido agendado nao pode disparar.
+  if (!flow || flow.deletedAt || flow.status !== "active") {
+    await cancelJobAndReleaseQuota({
+      storeId,
+      jobRef,
+      reason: !flow
+        ? "flow_inexistente"
+        : flow.deletedAt
+          ? "flow_deletado"
+          : "flow_nao_ativo",
+      now: Date.now(),
+      expectedStatus: "processing",
+    });
+    return { ok: true, status: "cancelled", reason: "fluxo inativo/excluido" };
+  }
+
+  const step = flow.steps[job.stepIndex];
   if (!step || step.action !== job.channel) {
     await cancelJobAndReleaseQuota({
       storeId, jobRef, reason: "step_inexistente_ou_canal_invalido", now: Date.now(), expectedStatus: "processing",

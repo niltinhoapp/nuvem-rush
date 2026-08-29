@@ -4,7 +4,7 @@
 // https://dev.nuvemshop.com.br/docs/homologation/checklist
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
-import { Box, Title, Text, Button, Card, Tag, Icon, Spinner, Input } from "@nimbus-ds/components";
+import { Box, Title, Text, Button, Card, Tag, Icon, Spinner, Input, Modal } from "@nimbus-ds/components";
 import {
   MailIcon,
   WhatsappIcon,
@@ -12,6 +12,9 @@ import {
   ExclamationTriangleIcon,
   PlusCircleIcon,
   EditIcon,
+  PlayIcon,
+  StopIcon,
+  TrashIcon,
 } from "@nimbus-ds/icons";
 import { ErrorBoundary } from "@tiendanube/nexo";
 import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
@@ -186,7 +189,9 @@ export default function DashboardPage() {
 
       {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
 
-      {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
+      {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && (
+        <FlowsList flows={flows} onChanged={loadFlows} />
+      )}
 
       {connection === "ready" && <DataRequestsCard />}
     </Box>
@@ -448,7 +453,7 @@ function EmptyState() {
   );
 }
 
-function FlowsList({ flows }: { flows: Flow[] }) {
+function FlowsList({ flows, onChanged }: { flows: Flow[]; onChanged: () => void }) {
   return (
     <Box display="flex" flexDirection="column" gap="4">
       <Box display="flex" justifyContent="space-between" alignItems="center">
@@ -463,40 +468,149 @@ function FlowsList({ flows }: { flows: Flow[] }) {
 
       <Box display="flex" flexDirection="column" gap="2">
         {flows.map((flow) => (
-          <FlowRow key={flow.flowId} flow={flow} />
+          <FlowRow key={flow.flowId} flow={flow} onChanged={onChanged} />
         ))}
       </Box>
     </Box>
   );
 }
 
-function FlowRow({ flow }: { flow: Flow }) {
+// Chama PATCH /api/flows/:id (pausar/ativar) ou DELETE (excluir), usada tanto
+// na listagem quanto na tela de edicao — mesmo endpoint, mesmo feedback.
+export async function setFlowStatus(
+  flowId: string,
+  status: "active" | "paused",
+): Promise<{ ok: boolean; error?: string }> {
+  const token = await sessionToken();
+  const r = await fetch(`/api/flows/${flowId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    return { ok: false, error: data.error ?? `status ${r.status}` };
+  }
+  return { ok: true };
+}
+
+export async function deleteFlow(flowId: string): Promise<{ ok: boolean; error?: string }> {
+  const token = await sessionToken();
+  const r = await fetch(`/api/flows/${flowId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    return { ok: false, error: data.error ?? `status ${r.status}` };
+  }
+  return { ok: true };
+}
+
+function FlowRow({ flow, onChanged }: { flow: Flow; onChanged: () => void }) {
   const statusTag = STATUS_TAG[flow.status] ?? STATUS_TAG.draft;
   const actions = Array.from(new Set(flow.steps.map((s) => ACTION_LABEL[s.action] ?? s.action)));
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+
+  const togglePause = async () => {
+    const next = flow.status === "active" ? "paused" : "active";
+    setBusy(true);
+    setFeedback(null);
+    const result = await setFlowStatus(flow.flowId, next);
+    setBusy(false);
+    setFeedback({
+      ok: result.ok,
+      msg: result.ok
+        ? next === "paused"
+          ? "Fluxo pausado. Novas inscrições e envios pendentes foram interrompidos."
+          : "Fluxo reativado. Voltando a aceitar novas inscrições."
+        : `Falha ao alterar o fluxo: ${result.error}`,
+    });
+    if (result.ok) onChanged();
+  };
+
+  const confirmAndDelete = async () => {
+    setBusy(true);
+    setFeedback(null);
+    const result = await deleteFlow(flow.flowId);
+    setBusy(false);
+    setConfirmDelete(false);
+    if (result.ok) {
+      setDeleted(true);
+      onChanged();
+    } else {
+      setFeedback({ ok: false, msg: `Falha ao excluir o fluxo: ${result.error}` });
+    }
+  };
+
+  if (deleted) return null; // feedback visual imediato; loadFlows() confirma em seguida
 
   return (
     <Card padding="none">
       <Card.Body padding="base">
-        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
-          <Box display="flex" flexDirection="column" gap="1">
-            <Box display="flex" alignItems="center" gap="2">
-              <Text fontWeight="bold">{flow.name}</Text>
-              <Tag appearance={statusTag.appearance}>{statusTag.label}</Tag>
+        <Box display="flex" flexDirection="column" gap="3">
+          <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+            <Box display="flex" flexDirection="column" gap="1">
+              <Box display="flex" alignItems="center" gap="2">
+                <Text fontWeight="bold">{flow.name}</Text>
+                <Tag appearance={statusTag.appearance}>{statusTag.label}</Tag>
+              </Box>
+              <Text fontSize="caption" color="neutral-textLow">
+                SE {TRIGGER_LABEL[flow.trigger.event] ?? flow.trigger.event}
+                {actions.length > 0 ? ` · ENTÃO ${actions.join(", ")}` : ""}
+              </Text>
+              <Text fontSize="caption" color="neutral-textLow">
+                {flow.stats.enrolled} contatos inscritos · {flow.stats.sent} mensagens enviadas
+              </Text>
             </Box>
-            <Text fontSize="caption" color="neutral-textLow">
-              SE {TRIGGER_LABEL[flow.trigger.event] ?? flow.trigger.event}
-              {actions.length > 0 ? ` · ENTÃO ${actions.join(", ")}` : ""}
-            </Text>
-            <Text fontSize="caption" color="neutral-textLow">
-              {flow.stats.enrolled} contatos inscritos · {flow.stats.sent} mensagens enviadas
-            </Text>
+            <Box display="flex" gap="2" alignItems="center">
+              <Button as="a" href={`/dashboard/flows/${flow.flowId}`}>
+                <Icon source={<EditIcon size={16} />} color="currentColor" />
+                Editar
+              </Button>
+              {flow.status !== "draft" && (
+                <Button disabled={busy} onClick={togglePause}>
+                  <Icon
+                    source={flow.status === "active" ? <StopIcon size={16} /> : <PlayIcon size={16} />}
+                    color="currentColor"
+                  />
+                  {flow.status === "active" ? "Pausar" : "Ativar"}
+                </Button>
+              )}
+              <Button disabled={busy} onClick={() => setConfirmDelete(true)} aria-label="Excluir fluxo">
+                <Icon source={<TrashIcon size={16} />} color="danger-textLow" />
+              </Button>
+            </Box>
           </Box>
-          <Button as="a" href={`/dashboard/flows/${flow.flowId}`}>
-            <Icon source={<EditIcon size={16} />} color="currentColor" />
-            Editar
-          </Button>
+
+          {feedback && (
+            <Text fontSize="caption" color={feedback.ok ? "success-textLow" : "danger-textLow"}>
+              {feedback.msg}
+            </Text>
+          )}
         </Box>
       </Card.Body>
+
+      <Modal open={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
+        <Modal.Header title="Excluir fluxo" />
+        <Modal.Body>
+          <Text>
+            Tem certeza que deseja excluir o fluxo <b>{flow.name}</b>? Os contatos já inscritos e o
+            histórico de envios são preservados, mas o fluxo some da listagem e para de disparar.
+          </Text>
+        </Modal.Body>
+        <Modal.Footer>
+          <Box display="flex" gap="2" justifyContent="flex-end" width="100%">
+            <Button onClick={() => setConfirmDelete(false)} disabled={busy}>Cancelar</Button>
+            <Button appearance="danger" onClick={confirmAndDelete} disabled={busy}>
+              {busy ? "Excluindo..." : "Excluir fluxo"}
+            </Button>
+          </Box>
+        </Modal.Footer>
+      </Modal>
     </Card>
   );
 }
