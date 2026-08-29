@@ -2,6 +2,7 @@
 // Construtor visual de fluxos (SE -> ENTAO) com React Flow.
 // Mantem uma cadeia linear: trigger -> step-0 -> step-1 -> ...
 import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ReactFlow,
   Background,
@@ -12,8 +13,8 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Box, Input, Button, Text, Icon } from "@nimbus-ds/components";
-import { PlusCircleIcon, DisketteIcon, RocketIcon } from "@nimbus-ds/icons";
+import { Box, Input, Button, Text, Icon, Modal } from "@nimbus-ds/components";
+import { PlusCircleIcon, DisketteIcon, RocketIcon, StopIcon, PlayIcon, TrashIcon } from "@nimbus-ds/icons";
 import { nodeTypes } from "./nodes";
 import { flowToGraph, graphToFlow, removeStepNode, collectOrphanStepIds } from "@/lib/flows/serialize";
 import { sessionToken } from "@/lib/nexo";
@@ -36,6 +37,7 @@ interface Props {
 }
 
 export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
+  const router = useRouter();
   const seed = useMemo(
     () => flowToGraph(initialFlow ?? EMPTY),
     [initialFlow],
@@ -45,6 +47,9 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
   const [name, setName] = useState(initialFlow?.name ?? "Novo fluxo");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [status, setStatus] = useState(initialFlow?.status);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Injeta callbacks de edicao no data de cada no (React Flow guarda data plano).
   const patchNodeData = useCallback(
@@ -148,10 +153,62 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
         throw new Error("Não foi possível salvar o fluxo.");
       }
       setMsg(status === "active" ? "Fluxo ativado!" : "Rascunho salvo.");
+      setStatus(status);
     } catch (e) {
       setMsg("Erro ao salvar: " + String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Replica pausar/ativar/excluir aqui — mesmos endpoints da listagem
+  // (PATCH/DELETE /api/flows/:id), so disponivel para um fluxo ja salvo.
+  async function togglePause() {
+    if (!initialFlow?.flowId) return;
+    const next = status === "active" ? "paused" : "active";
+    setLifecycleBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch(`/api/flows/${initialFlow.flowId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(await authHeaders(devStoreId)) },
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) {
+        if (res.status === 402) {
+          setMsg("Seu período grátis terminou. Assine o plano para reativar automações.");
+          return;
+        }
+        throw new Error("Não foi possível alterar o status do fluxo.");
+      }
+      setStatus(next);
+      setMsg(
+        next === "paused"
+          ? "Fluxo pausado. Novas inscrições e envios pendentes foram interrompidos."
+          : "Fluxo reativado. Voltando a aceitar novas inscrições.",
+      );
+    } catch (e) {
+      setMsg("Erro ao alterar o fluxo: " + String(e));
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  async function confirmAndDelete() {
+    if (!initialFlow?.flowId) return;
+    setLifecycleBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch(`/api/flows/${initialFlow.flowId}`, {
+        method: "DELETE",
+        headers: await authHeaders(devStoreId),
+      });
+      if (!res.ok) throw new Error("Não foi possível excluir o fluxo.");
+      router.push("/dashboard");
+    } catch (e) {
+      setMsg("Erro ao excluir o fluxo: " + String(e));
+      setLifecycleBusy(false);
+      setConfirmDelete(false);
     }
   }
 
@@ -186,6 +243,21 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
           <Icon source={<RocketIcon size={16} />} color="currentColor" />
           Ativar fluxo
         </Button>
+        {initialFlow?.flowId && status !== "draft" && (
+          <Button appearance="neutral" disabled={lifecycleBusy} onClick={togglePause}>
+            <Icon
+              source={status === "active" ? <StopIcon size={16} /> : <PlayIcon size={16} />}
+              color="currentColor"
+            />
+            {status === "active" ? "Pausar" : "Ativar"}
+          </Button>
+        )}
+        {initialFlow?.flowId && (
+          <Button appearance="neutral" disabled={lifecycleBusy} onClick={() => setConfirmDelete(true)}>
+            <Icon source={<TrashIcon size={16} />} color="danger-textLow" />
+            Excluir
+          </Button>
+        )}
         {msg && (
           <Text fontSize="caption" color="neutral-textLow">
             {msg}
@@ -213,6 +285,24 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
           <Controls />
         </ReactFlow>
       </Box>
+
+      <Modal open={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
+        <Modal.Header title="Excluir fluxo" />
+        <Modal.Body>
+          <Text>
+            Tem certeza que deseja excluir o fluxo <b>{name}</b>? Os contatos já inscritos e o
+            histórico de envios são preservados, mas o fluxo some da listagem e para de disparar.
+          </Text>
+        </Modal.Body>
+        <Modal.Footer>
+          <Box display="flex" gap="2" justifyContent="flex-end" width="100%">
+            <Button onClick={() => setConfirmDelete(false)} disabled={lifecycleBusy}>Cancelar</Button>
+            <Button appearance="danger" onClick={confirmAndDelete} disabled={lifecycleBusy}>
+              {lifecycleBusy ? "Excluindo..." : "Excluir fluxo"}
+            </Button>
+          </Box>
+        </Modal.Footer>
+      </Modal>
     </Box>
   );
 }

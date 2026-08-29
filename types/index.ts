@@ -206,6 +206,7 @@ export interface Flow {
   steps: Step[];
   stats: { enrolled: number; sent: number; failed: number };
   createdAt: number;
+  deletedAt?: number; // soft delete — nao afeta "status", so tira o fluxo da listagem/inscricao
 }
 
 export interface Enrollment {
