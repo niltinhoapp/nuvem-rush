@@ -16,10 +16,17 @@
 // fluxo "Provedor de Tecnologia" concluido e uma Configuration do Embedded
 // Signup criada (NEXT_PUBLIC_WHATSAPP_ES_CONFIG_ID).
 
+import {
+  WHATSAPP_TEMPLATE_CATALOG_KEYS,
+  getCatalogTemplate,
+  type TemplateCatalogEntry,
+  type TemplateCatalogKey,
+} from "./catalog";
+import { normalizeTemplateStatus } from "./templateStatus";
+import type { WhatsappCatalogTemplate, WhatsappTemplateStatus } from "@/types";
+
 const GRAPH = "https://graph.facebook.com/v22.0";
 
-export const DEFAULT_TEMPLATE_NAME = "pos_venda_agradecimento";
-export const DEFAULT_TEMPLATE_LANG = "pt_BR";
 
 async function graphJson(res: Response): Promise<Record<string, unknown>> {
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -84,8 +91,8 @@ export async function subscribeAppToWaba(
 
 // Registra o numero na Cloud API (necessario para numeros novos; numeros em
 // coexistencia com o app WhatsApp Business ja vem registrados, e registrar de
-// novo retorna erro "already registered" — tratado aqui como nao-fatal, igual
-// ao createDefaultTemplate). O pin e a verificacao em duas etapas do numero —
+// novo retorna erro "already registered" — tratado aqui como nao-fatal. O pin
+// e a verificacao em duas etapas do numero —
 // se nao existir, este define uma.
 export async function registerPhoneNumber(
   phoneNumberId: string,
@@ -122,10 +129,11 @@ export async function registerPhoneNumber(
 // o texto e puramente sobre o pedido, sem apelo promocional nem "responda SAIR"
 // (opt-out so faz sentido em templates de MARKETING; incluir aqui forcaria a
 // Meta a reclassificar como MARKETING).
-export async function createDefaultTemplate(
+export async function createCatalogTemplate(
   wabaId: string,
   token: string,
-): Promise<{ created: boolean; alreadyExisted: boolean }> {
+  template: TemplateCatalogEntry,
+): Promise<{ created: boolean; alreadyExisted: boolean; status?: WhatsappTemplateStatus }> {
   const res = await fetch(`${GRAPH}/${wabaId}/message_templates`, {
     method: "POST",
     headers: {
@@ -133,21 +141,29 @@ export async function createDefaultTemplate(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      name: DEFAULT_TEMPLATE_NAME,
-      language: DEFAULT_TEMPLATE_LANG,
-      category: "UTILITY",
+      name: template.name,
+      language: template.language,
+      category: template.category,
       components: [
         {
           type: "BODY",
-          text:
-            "Ola {{1}}! Recebemos seu pedido e ja estamos preparando tudo. " +
-            "Qualquer duvida sobre a sua compra, e so responder por aqui.",
-          example: { body_text: [["Maria"]] },
+          text: template.body,
+          example: { body_text: [template.example] },
         },
       ],
     }),
   });
-  if (res.ok) return { created: true, alreadyExisted: false };
+  if (res.ok) {
+    await res.json().catch(() => ({}));
+    return {
+      created: true,
+      alreadyExisted: false,
+      // A criação nunca comprova aprovação, mesmo que a resposta carregue um
+      // campo de status. Apenas o lookup de uma reconexão ou o webhook pode
+      // mudar PENDING para APPROVED.
+      status: "PENDING",
+    };
+  }
 
   const body = (await res.json().catch(() => ({}))) as {
     error?: { message?: string; error_user_title?: string };
@@ -158,4 +174,95 @@ export async function createDefaultTemplate(
     return { created: false, alreadyExisted: true };
   }
   throw new Error(`criar template: ${msg.trim() || `HTTP ${res.status}`}`);
+}
+
+// Consulta o template ja existente durante reconexao. Essa leitura evita
+// assumir que um template anterior continua aprovado; se nao houver status
+// verificavel, o chamador permanece fail-closed.
+export async function getCatalogTemplateStatus(
+  wabaId: string,
+  token: string,
+  template: TemplateCatalogEntry,
+): Promise<WhatsappTemplateStatus | undefined> {
+  const url = new URL(`${GRAPH}/${wabaId}/message_templates`);
+  url.searchParams.set("name", template.name);
+  url.searchParams.set("fields", "name,language,status");
+  const body = await graphJson(await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  }));
+  const templates = Array.isArray(body.data) ? body.data : [];
+  const existing = templates.find((item): item is Record<string, unknown> =>
+    !!item
+    && typeof item === "object"
+    && (item as Record<string, unknown>).name === template.name
+    && (item as Record<string, unknown>).language === template.language,
+  );
+  return existing ? normalizeTemplateStatus(existing.status) : undefined;
+}
+
+export type CatalogTemplateOperations = {
+  create: typeof createCatalogTemplate;
+  lookup: typeof getCatalogTemplateStatus;
+};
+
+export type CatalogTemplateProvisionOutcome = {
+  outcome: "created" | "existing_status_confirmed" | "unconfirmed";
+  template?: WhatsappCatalogTemplate;
+};
+
+export type CatalogTemplateProvision = Record<
+  TemplateCatalogKey,
+  CatalogTemplateProvisionOutcome
+>;
+
+// Cada criação é independente e sequencial. Falhas não autorizam envios e
+// tampouco autorizam sobrescrever o último estado confirmado em reconnect.
+export async function provisionCatalogTemplates(
+  wabaId: string,
+  token: string,
+  operations: CatalogTemplateOperations = {
+    create: createCatalogTemplate,
+    lookup: getCatalogTemplateStatus,
+  },
+): Promise<CatalogTemplateProvision> {
+  const templates = {} as CatalogTemplateProvision;
+  for (const key of WHATSAPP_TEMPLATE_CATALOG_KEYS) {
+    const catalog = getCatalogTemplate(key);
+    try {
+      const created = await operations.create(wabaId, token, catalog);
+      if (created.created) {
+        templates[key] = {
+          outcome: "created",
+          template: {
+            name: catalog.name,
+            language: catalog.language,
+            status: "PENDING",
+            statusUpdatedAt: Date.now(),
+          },
+        };
+      } else if (created.alreadyExisted) {
+        try {
+          const status = await operations.lookup(wabaId, token, catalog);
+          templates[key] = status
+            ? {
+              outcome: "existing_status_confirmed",
+              template: {
+                name: catalog.name,
+                language: catalog.language,
+                status,
+                statusUpdatedAt: Date.now(),
+              },
+            }
+            : { outcome: "unconfirmed" };
+        } catch {
+          templates[key] = { outcome: "unconfirmed" };
+        }
+      } else {
+        templates[key] = { outcome: "unconfirmed" };
+      }
+    } catch {
+      templates[key] = { outcome: "unconfirmed" };
+    }
+  }
+  return templates;
 }

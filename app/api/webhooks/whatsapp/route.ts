@@ -13,6 +13,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db, col } from "@/lib/firebase/admin";
+import {
+  parseMetaTemplateStatusUpdate,
+} from "@/lib/whatsapp/templateStatus";
+import { updateTemplateStatus } from "@/lib/whatsapp/templateStatus.firestore";
 import type { Contact } from "@/types";
 
 const OPT_OUT_WORDS = ["sair", "parar", "cancelar", "descadastrar", "stop", "pare"];
@@ -55,6 +59,11 @@ export async function POST(req: NextRequest) {
     const body = JSON.parse(raw);
     for (const entry of body?.entry ?? []) {
       for (const change of entry?.changes ?? []) {
+        const templateUpdate = parseMetaTemplateStatusUpdate(entry, change);
+        if (templateUpdate) {
+          await updateTemplateStatus(templateUpdate);
+          continue;
+        }
         const value = change?.value;
         const phoneNumberId = value?.metadata?.phone_number_id as string | undefined;
         const messages = value?.messages as Array<{ from?: string; text?: { body?: string } }> | undefined;

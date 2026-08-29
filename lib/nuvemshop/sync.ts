@@ -1,9 +1,12 @@
 // Sincroniza pedidos e contatos da API Nuvemshop para o Firestore.
 // Enriquece cada item do pedido com categoria/marca (buscadas do produto, com cache).
-import { col } from "@/lib/firebase/admin";
-import { NuvemshopClient } from "./client";
+import { db, col, storeRef } from "@/lib/firebase/admin";
+import { NuvemshopClient, NuvemshopApiError } from "./client";
 import type { LocalizedString, NsOrder, NsProduct, NsTrackingInfo } from "./types";
 import type { Contact, Order, OrderItem, Product } from "@/types";
+import { findSuppressedContactId } from "@/lib/lgpd/firestore";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
+import { recordBillingAccessSignal } from "@/lib/billing/accessSignal.firestore";
 
 function loc(value: LocalizedString | undefined): string {
   if (!value) return "";
@@ -46,7 +49,13 @@ async function getProductMeta(
     categoryIds,
     price: 0,
   };
-  await ref.set(product, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const store = await tx.get(storeRef(storeId));
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    tx.set(ref, product, { merge: true });
+  });
   return { categoryIds, brand };
 }
 
@@ -54,27 +63,42 @@ async function getProductMeta(
 async function upsertContact(storeId: string, order: NsOrder): Promise<Contact> {
   const nsCustomerId = order.customer?.id ? String(order.customer.id) : null;
   const email = order.customer?.email ?? order.contact_email ?? null;
+  const phone = order.customer?.phone ?? order.contact_phone ?? null;
+  const suppressedContactId = await findSuppressedContactId(storeId, {
+    id: nsCustomerId ?? undefined,
+    email,
+    phone,
+  });
   // Chave estavel: id do cliente, senao o e-mail.
-  const contactId = nsCustomerId ?? (email ? `email:${email}` : `order:${order.id}`);
+  const contactId = suppressedContactId
+    ?? nsCustomerId
+    ?? (email ? `email:${email}` : `order:${order.id}`);
   const ref = col(storeId, "contacts").doc(contactId);
 
-  const prev = await ref.get();
-  const prevData = prev.data() as Contact | undefined;
-
-  const contact: Contact = {
-    contactId,
-    nsCustomerId,
-    name: order.customer?.name ?? order.contact_name ?? prevData?.name ?? null,
-    email,
-    phone: order.customer?.phone ?? order.contact_phone ?? null,
-    tags: prevData?.tags ?? [],
-    ordersCount: (prevData?.ordersCount ?? 0) + 1,
-    totalSpent: (prevData?.totalSpent ?? 0) + num(order.total),
-    optOut: prevData?.optOut ?? false,
-    lastOrderAt: Date.now(),
-  };
-  await ref.set(contact, { merge: true });
-  return contact;
+  return db.runTransaction(async (tx) => {
+    const [store, prev] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(ref),
+    ]);
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    const prevData = prev.data() as Contact | undefined;
+    const contact: Contact = {
+      contactId,
+      nsCustomerId: suppressedContactId ? null : nsCustomerId,
+      name: suppressedContactId ? null : (order.customer?.name ?? order.contact_name ?? prevData?.name ?? null),
+      email: suppressedContactId ? null : email,
+      phone: suppressedContactId ? null : phone,
+      tags: suppressedContactId ? [] : (prevData?.tags ?? []),
+      ordersCount: (prevData?.ordersCount ?? 0) + 1,
+      totalSpent: (prevData?.totalSpent ?? 0) + num(order.total),
+      optOut: suppressedContactId ? true : (prevData?.optOut ?? false),
+      lastOrderAt: Date.now(),
+    };
+    tx.set(ref, contact, { merge: true });
+    return contact;
+  });
 }
 
 export type OrderEvent = "created" | "paid" | "fulfilled" | "cancelled";
@@ -118,9 +142,26 @@ export async function syncOrder(
   accessToken: string,
   nsOrderId: string,
   event: OrderEvent = "paid",
+  // Injetavel so para teste (fake HTTP) — nunca chamado com a API real nesta OS.
+  clientOptions: ConstructorParameters<typeof NuvemshopClient>[2] = {},
 ): Promise<{ order: Order; contact: Contact }> {
-  const client = new NuvemshopClient(storeId, accessToken);
-  const raw = await client.getOrder(nsOrderId);
+  const client = new NuvemshopClient(storeId, accessToken, clientOptions);
+  // Sinal comercial (ver lib/billing/policy.ts): esta e uma chamada real,
+  // autenticada com o token da loja. Um 200 PROVA que a Nuvemshop concede
+  // acesso agora; um 402 PROVA o oposto (documentado: cobre falta de
+  // pagamento e esgotamento dos dias gratis). Outros erros (timeout, 5xx,
+  // 401/403 de token invalido) sao ambiguos — nao mexem no sinal, so
+  // relancados para o tratamento de erro normal do chamador.
+  let raw: NsOrder;
+  try {
+    raw = await client.getOrder(nsOrderId);
+    await recordBillingAccessSignal(storeId, false);
+  } catch (error) {
+    if (error instanceof NuvemshopApiError && error.status === 402) {
+      await recordBillingAccessSignal(storeId, true);
+    }
+    throw error;
+  }
 
   const contact = await upsertContact(storeId, raw);
 
@@ -156,7 +197,13 @@ export async function syncOrder(
     ...(event === "paid" ? { paidAt: Date.now() } : {}),
     ...(event === "fulfilled" ? { fulfilledAt: Date.now() } : {}),
   };
-  await orderRef.set(order, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const store = await tx.get(storeRef(storeId));
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    tx.set(orderRef, order, { merge: true });
+  });
 
   return { order, contact };
 }

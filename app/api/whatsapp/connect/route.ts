@@ -7,15 +7,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveStoreId } from "@/lib/auth/session";
 import { storeRef } from "@/lib/firebase/admin";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import {
   exchangeCodeForToken,
   subscribeAppToWaba,
   registerPhoneNumber,
-  createDefaultTemplate,
-  DEFAULT_TEMPLATE_NAME,
-  DEFAULT_TEMPLATE_LANG,
+  provisionCatalogTemplates,
 } from "@/lib/whatsapp/embedded";
-import type { Store, StoreWhatsapp } from "@/types";
+import { WHATSAPP_TEMPLATE_CATALOG_KEYS } from "@/lib/whatsapp/catalog";
+import { persistWhatsappConnection } from "@/lib/whatsapp/connectPersistence";
+import { storedCatalogTemplate } from "@/lib/whatsapp/templateStatus";
+import type { Store } from "@/types";
 
 export async function GET(req: NextRequest) {
   const storeId = resolveStoreId(req);
@@ -26,7 +28,15 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     connected: wa?.status === "connected",
     phoneNumberId: wa?.phoneNumberId ?? null,
-    templateName: wa?.templateName ?? null,
+    templates: Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
+      const template = storedCatalogTemplate(wa, key);
+      return [key, template ? {
+        name: template.name,
+        language: template.language,
+        status: template.status,
+        statusUpdatedAt: template.statusUpdatedAt ?? null,
+      } : null];
+    })),
   });
 }
 
@@ -47,6 +57,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const initialStore = await storeRef(storeId).get();
+    if (!isStoreCommerciallyActive(initialStore.data()?.status)) {
+      return NextResponse.json({ error: "loja inativa" }, { status: 409 });
+    }
+
     // 1. code -> business token do lojista (longa duracao).
     const accessToken = await exchangeCodeForToken(body.code);
 
@@ -60,37 +75,38 @@ export async function POST(req: NextRequest) {
     try {
       await registerPhoneNumber(body.phoneNumberId, accessToken);
     } catch (err) {
-      console.warn(`[whatsapp connect] falha ao registrar numero (${storeId}):`, err);
+      console.warn("[whatsapp connect] phone registration failed", {
+        storeId,
+        errorName: err instanceof Error ? err.name : "unknown",
+      });
     }
 
-    // 3. Template padrao de pos-venda na conta DELE (best effort: se falhar,
-    //    a conexao vale mesmo assim e o lojista cria depois pela UI da Meta).
-    let templateOk = false;
-    try {
-      await createDefaultTemplate(body.wabaId, accessToken);
-      templateOk = true;
-    } catch (err) {
-      console.warn(`[whatsapp connect] template nao criado (${storeId}):`, err);
-    }
-
-    const whatsapp: StoreWhatsapp = {
+    // 3. Catálogo fechado, criado sequencialmente na WABA do lojista. Um
+    // resultado sem estado confirmado da Meta não pode apagar nem degradar
+    // um template já persistido nesta mesma WABA.
+    const provision = await provisionCatalogTemplates(body.wabaId, accessToken);
+    const templates = await persistWhatsappConnection({
+      storeId,
       wabaId: body.wabaId,
       phoneNumberId: body.phoneNumberId,
-      accessToken, // TODO: criptografar em repouso (KMS)
-      status: "connected",
-      ...(templateOk
-        ? { templateName: DEFAULT_TEMPLATE_NAME, templateLang: DEFAULT_TEMPLATE_LANG }
-        : {}),
-      connectedAt: Date.now(),
-      tokenRefreshedAt: Date.now(),
-    };
-    await storeRef(storeId).update({ whatsapp });
+      accessToken,
+      provision,
+    });
 
-    return NextResponse.json({ connected: true, templateCreated: templateOk });
+    return NextResponse.json({
+      connected: true,
+      templates: Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => [
+        key,
+        templates[key]?.status ?? null,
+      ])),
+    });
   } catch (err) {
-    console.error(`[whatsapp connect] falha (${storeId}):`, err);
+    console.error("[whatsapp connect] failed", {
+      storeId,
+      errorName: err instanceof Error ? err.name : "unknown",
+    });
     return NextResponse.json(
-      { error: "falha ao conectar WhatsApp", detail: String(err) },
+      { error: "falha ao conectar WhatsApp" },
       { status: 502 },
     );
   }

@@ -7,7 +7,7 @@ const now = Date.UTC(2026, 7, 18, 12, 0, 0);
 const firstInstall = buildStoreInstallData(
   "7865512",
   { accessToken: "new-token", scope: "read_orders,write_webhooks" },
-  false,
+  { exists: false },
   now,
 );
 
@@ -49,7 +49,7 @@ const existingStore = {
 const reinstallPatch = buildStoreInstallData(
   "7865512",
   { accessToken: "fresh-token", scope: "read_orders,write_webhooks" },
-  true,
+  { exists: true, status: existingStore.status },
   now,
 );
 const reinstalledStore = { ...existingStore, ...reinstallPatch };
@@ -65,5 +65,26 @@ assert.equal(reinstalledStore.customField, "preserve-me", "merge deve preservar 
 assert.equal("plan" in reinstallPatch, false, "patch de reinstalacao nao deve sobrescrever plan");
 assert.equal("quotas" in reinstallPatch, false, "patch de reinstalacao nao deve sobrescrever quotas");
 assert.equal("installedAt" in reinstallPatch, false, "patch de reinstalacao nao deve sobrescrever installedAt");
+
+const redactedTombstone = {
+  status: "redacted",
+  redactionRequestId: "opaque-request",
+  redactedAt: now - 1,
+  tombstoneVersion: 1,
+};
+const postRedactInstall = buildStoreInstallData(
+  "7865512",
+  { accessToken: "post-redact-token", scope: "read_orders,write_webhooks" },
+  { exists: true, status: redactedTombstone.status },
+  now,
+);
+assert.equal(postRedactInstall.status, "active");
+assert.equal(postRedactInstall.accessToken, "post-redact-token");
+assert.equal(postRedactInstall.plan, "essencial");
+assert.equal(postRedactInstall.installedAt, now);
+assert.equal(postRedactInstall.quotas?.dispatchesMonthUsed, 0);
+assert.equal(postRedactInstall.quotas?.whatsappMonthUsed, 0);
+assert.equal("redactedAt" in postRedactInstall, false);
+assert.equal("redactionRequestId" in postRedactInstall, false);
 
 console.log("test-oauth-reinstall: OK");

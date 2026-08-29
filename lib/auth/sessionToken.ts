@@ -14,7 +14,9 @@ export interface SessionClaims {
 
 // Retorna as claims se o token for valido (assinatura + expiracao), senao null.
 export function verifySessionToken(token: string): SessionClaims | null {
-  const secret = process.env.NUVEMSHOP_CLIENT_SECRET ?? "";
+  const secret = process.env.NUVEMSHOP_CLIENT_SECRET;
+  if (!secret?.trim()) return null;
+
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, signatureB64] = parts;
@@ -35,8 +37,10 @@ export function verifySessionToken(token: string): SessionClaims | null {
     return null;
   }
 
-  // Expiracao (exp em segundos).
-  if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return null;
+  // Expiracao obrigatoria, em segundos. A sessao deve estar estritamente no
+  // futuro para evitar aceitar tokens sem prazo ou ja vencidos no limite.
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return null;
+  if (payload.exp * 1000 <= Date.now()) return null;
 
   // Confirmado via inspecao de um token real (ver stores/_debug):
   // o claim correto e "storeId" (camelCase). "sub" e outra coisa (parece

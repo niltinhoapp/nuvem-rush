@@ -1,6 +1,13 @@
 // Tipos centrais do dominio. Espelham as colecoes do Firestore.
+import type { TemplateCatalogKey } from "@/lib/whatsapp/catalog";
 
 export type Plan = "essencial" | "crescimento" | "turbo";
+
+// V1 (Billing nativo Nuvemshop): unico plano selecionavel. crescimento/turbo
+// sao LEGADO — lojas que ja os tem preservam o dado historico, mas nenhum
+// fluxo novo os oferece nem os concede. Ver lib/billing/policy.ts.
+export const V1_AVAILABLE_PLAN: Plan = "essencial";
+export const LEGACY_PLAN_IDS: readonly Plan[] = ["crescimento", "turbo"];
 
 export interface Store {
   storeId: string; // = user_id retornado pela Nuvemshop
@@ -8,17 +15,41 @@ export interface Store {
   accessToken: string; // criptografado em repouso
   scope: string;
   plan: Plan;
-  status: "active" | "uninstalled";
+  status: "active" | "uninstalled" | "redacting" | "redacted";
   installedAt: number;
+  // Cache OPERACIONAL do estado comercial (nao ha ledger local nenhum — ver
+  // lib/billing/policy.ts para o porque). Gravada por
+  // lib/billing/accessSignal.firestore.ts a partir de duas fontes 100%
+  // documentadas: os webhooks app/suspended|app/resumed, e o HTTP 402
+  // observado numa chamada real que ja fazemos a Nuvemshop com o token da
+  // loja (order sync, cron diario de carrinhos, registro de webhook no
+  // install). Sujeita a TTL (policy.ts::COMMERCIAL_CACHE_TTL_MS); velha
+  // demais sem novo sinal vira billing_unknown (fail-closed), nunca "herda"
+  // paid_active as cegas.
+  billingBlocked?: boolean;
+  // Ultima vez que um sinal comercial real foi observado (ver acima).
+  // Ausente/velho demais => resolveStoreCommercialState trata como
+  // billing_unknown (ver policy.ts).
+  commercialSyncedAt?: number;
+  // Domínios legítimos da loja (GET /store: `domains` + `original_domain`),
+  // cacheados server-side para validar Origin do sinal NubeSDK (tenant-origin).
+  // NAO preenchidos no OAuth; populados sob demanda pelo cron de sinais.
+  domains?: string[];
+  originalDomain?: string;
+  domainsRefreshedAt?: number;
   quotas: {
     contactsLimit: number;
     // Cota de E-MAIL (nome legado "dispatches" mantido p/ compatibilidade
     // com documentos ja existentes no Firestore).
     dispatchesMonthLimit: number;
     dispatchesMonthUsed: number;
+    // Reservas em voo. Sao contabilizadas junto com `used` antes de iniciar
+    // qualquer provider, evitando que workers concorrentes ultrapassem a cota.
+    dispatchesMonthReserved?: number;
     // Cota de WHATSAPP — separada porque cada mensagem custa ~R$0,33 na Meta.
     whatsappMonthLimit: number;
     whatsappMonthUsed: number;
+    whatsappMonthReserved?: number;
     // Periodo (YYYY-MM) a que os contadores acima se referem. Quando vira o
     // mes, os contadores sao zerados no proximo disparo (ver lib/dispatch.ts).
     periodKey?: string;
@@ -39,6 +70,12 @@ export interface StoreWhatsapp {
   // Template padrao de pos-venda criado automaticamente na WABA do lojista.
   templateName?: string;
   templateLang?: string;
+  // Estado canônico do template default, atualizado pelo webhook da Meta.
+  // Qualquer valor diferente de APPROVED bloqueia envio comercial.
+  templateStatus?: WhatsappTemplateStatus;
+  templateStatusUpdatedAt?: number;
+  // Catálogo fechado e aditivo. Instalações legadas permanecem sem migração.
+  templates?: Partial<Record<TemplateCatalogKey, WhatsappCatalogTemplate>>;
   connectedAt: number;
   // O token da config do Embedded Signup expira em 60 dias; o cron
   // /api/cron/refresh-whatsapp-tokens renova mensalmente via fb_exchange_token.
@@ -48,6 +85,23 @@ export interface StoreWhatsapp {
   lastRefreshAttempt?: number;
   refreshFailCount?: number;
 }
+
+export interface WhatsappCatalogTemplate {
+  name: string;
+  language: string;
+  status: WhatsappTemplateStatus;
+  statusUpdatedAt?: number;
+}
+
+// A Meta pode adicionar eventos sem aviso. Preservamos o valor normalizado e
+// tratamos somente APPROVED como liberado para envio.
+export type WhatsappTemplateStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PAUSED"
+  | "DISABLED"
+  | (string & {});
 
 export interface Product {
   productId: string;
@@ -173,6 +227,19 @@ export interface Job {
   stepIndex: number;
   channel: ActionType;
   runAt: number;
-  status: "scheduled" | "sent" | "failed" | "cancelled";
+  // "processing": reivindicado por um worker (claim atomico) e ainda em envio.
+  // Estado intermediario que impede que dois crons/workers disparem o mesmo job.
+  status: "scheduled" | "processing" | "sent" | "failed" | "cancelled";
+  claimedAt?: number; // quando o job foi reivindicado (scheduled -> processing)
+  // Fencing da reserva de cota. So o worker que criou este id pode finalizar
+  // ou liberar a reserva; cancelamentos removem o id antes de outro worker agir.
+  quotaReservationId?: string;
+  quotaReservationPeriodKey?: string;
+  quotaReservedAt?: number;
+  // Retry (Fase E): tentativas ja feitas, ultimo erro e proxima tentativa
+  // (backoff). Em retry o job volta a "scheduled" com runAt = nextAttemptAt.
+  attempts?: number;
+  lastError?: string;
+  nextAttemptAt?: number;
   cloudTaskName?: string;
 }

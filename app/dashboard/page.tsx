@@ -15,6 +15,10 @@ import {
 } from "@nimbus-ds/icons";
 import { ErrorBoundary } from "@tiendanube/nexo";
 import { initNexo, getNexo, sessionToken } from "@/lib/nexo";
+import { templateStatusLabel } from "@/lib/whatsapp/templateStatus";
+import { WHATSAPP_TEMPLATE_CATALOG_KEYS, getCatalogTemplate, type TemplateCatalogKey } from "@/lib/whatsapp/catalog";
+import type { CommercialState } from "@/lib/billing/policy";
+import { PLANS } from "@/lib/plans";
 import type { Flow } from "@/types";
 
 type ConnectionStatus = "loading" | "ready" | "error";
@@ -44,11 +48,16 @@ export default function DashboardPage() {
   const [connection, setConnection] = useState<ConnectionStatus>("loading");
   const [flows, setFlows] = useState<Flow[] | null>(null);
   const [flowsFailed, setFlowsFailed] = useState(false);
-  const [wa, setWa] = useState<{ connected: boolean; phoneNumberId: string | null } | null>(null);
+  const [wa, setWa] = useState<{
+    connected: boolean;
+    phoneNumberId: string | null;
+    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
+  } | null>(null);
   const [testState, setTestState] = useState<{ sending: boolean; msg: string }>({
     sending: false,
     msg: "",
   });
+  const [billing, setBilling] = useState<{ state: CommercialState } | null>(null);
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -69,12 +78,27 @@ export default function DashboardPage() {
       });
   };
 
+  const loadBillingStatus = () => {
+    sessionToken()
+      .then(async (token) => {
+        const r = await fetch("/api/billing/status", { headers: { Authorization: `Bearer ${token}` } });
+        if (!r.ok) throw new Error(`status ${r.status}`);
+        const data = await r.json();
+        setBilling({ state: data.state });
+      })
+      .catch((e) => console.error("Falha ao checar status comercial:", e));
+  };
+
   const loadWhatsappStatus = () => {
     sessionToken()
       .then(async (token) => {
         const r = await fetch("/api/whatsapp/connect", { headers: { Authorization: `Bearer ${token}` } });
         const data = await r.json();
-        setWa({ connected: !!data.connected, phoneNumberId: data.phoneNumberId ?? null });
+        setWa({
+          connected: !!data.connected,
+          phoneNumberId: data.phoneNumberId ?? null,
+          templates: data.templates && typeof data.templates === "object" ? data.templates : {},
+        });
       })
       .catch((e) => console.error("Falha ao checar status do WhatsApp:", e));
   };
@@ -116,6 +140,7 @@ export default function DashboardPage() {
         setConnection("ready");
         loadFlows();
         loadWhatsappStatus();
+        loadBillingStatus();
       })
       .catch((e) => {
         console.error("Nexo falhou:", e);
@@ -126,6 +151,8 @@ export default function DashboardPage() {
   const content = (
     <Box padding="6" display="flex" flexDirection="column" gap="6">
       <PageHeader />
+
+      {connection === "ready" && billing && <BillingStatusCard billing={billing} />}
 
       {connection === "ready" && (
         <WhatsappStatusCard
@@ -160,6 +187,8 @@ export default function DashboardPage() {
       {connection === "ready" && !flowsFailed && flows !== null && flows.length === 0 && <EmptyState />}
 
       {connection === "ready" && !flowsFailed && flows !== null && flows.length > 0 && <FlowsList flows={flows} />}
+
+      {connection === "ready" && <DataRequestsCard />}
     </Box>
   );
 
@@ -190,6 +219,58 @@ function PageHeader() {
   );
 }
 
+// Card comercial (Billing V1 — Nuvemshop nativo): mostra se a Nuvemshop esta
+// concedendo acesso agora. NAO afirma "assinatura em dia" nem mostra preco
+// vinculado a um pagamento confirmado — nao ha, documentado, como distinguir
+// "dentro do periodo gratis" de "pagando" (ver lib/billing/policy.ts). O
+// periodo gratis (14 dias) e a cobranca em si sao geridos pela propria
+// Nuvemshop; este card so reflete se ela esta liberando o uso.
+function BillingStatusCard({
+  billing,
+}: {
+  billing: { state: CommercialState };
+}) {
+  const { title, description, appearance } = (() => {
+    switch (billing.state) {
+      case "commercial_access_active":
+        return {
+          title: "Acesso ativo",
+          // NUNCA "Plano ativo"/"assinatura em dia": um HTTP 200 da Nuvemshop
+          // so prova acesso liberado agora, nunca pagamento confirmado.
+          description: `Seu plano ${PLANS.essencial.label} está com acesso liberado pela Nuvemshop (período grátis ou assinatura em dia — a Nuvemshop não nos informa qual dos dois).`,
+          appearance: "success" as const,
+        };
+      case "commercial_access_blocked":
+        return {
+          title: "Acesso bloqueado pela Nuvemshop",
+          description: "A Nuvemshop pausou o acesso deste app (pagamento pendente ou período grátis encerrado). Regularize pelo painel da Nuvemshop para retomar as automações.",
+          appearance: "danger" as const,
+        };
+      case "billing_unknown":
+      default:
+        return {
+          title: "Não foi possível confirmar seu acesso agora",
+          description: "Estamos com uma instabilidade temporária para confirmar seu acesso. Isso não afeta automações já em andamento; tente novamente em alguns minutos.",
+          appearance: "warning" as const,
+        };
+    }
+  })();
+
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" flexDirection="column" gap="1">
+            <Text fontWeight="bold">{title}</Text>
+            <Text fontSize="caption" color="neutral-textLow">{description}</Text>
+          </Box>
+          <Tag appearance={appearance}>{title}</Tag>
+        </Box>
+      </Card.Body>
+    </Card>
+  );
+}
+
 // Card de conexao do WhatsApp (Embedded Signup) + envio de mensagem de teste.
 // O botao "Conectar" abre /connect-whatsapp em nova aba (o fluxo com a Meta
 // nao roda dentro do iframe). O teste funciona mesmo antes de conectar,
@@ -201,7 +282,11 @@ function WhatsappStatusCard({
   onTest,
   testState,
 }: {
-  wa: { connected: boolean; phoneNumberId: string | null } | null;
+  wa: {
+    connected: boolean;
+    phoneNumberId: string | null;
+    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
+  } | null;
   onConnect: () => void;
   onRefresh: () => void;
   onTest: (to: string) => void;
@@ -242,6 +327,23 @@ function WhatsappStatusCard({
               </Box>
             )}
           </Box>
+
+          {connected && (
+            <Box display="flex" flexDirection="column" gap="1">
+              {WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
+                const catalog = getCatalogTemplate(key);
+                const status = wa?.templates[key]?.status;
+                return (
+                  <Text key={key} fontSize="caption" color="neutral-textLow">
+                    {catalog.label}: {templateStatusLabel(status)}
+                  </Text>
+                );
+              })}
+              <Text fontSize="caption" color="neutral-textLow">
+                Cada automação só envia após a aprovação do respectivo template pela Meta.
+              </Text>
+            </Box>
+          )}
 
           {/* Envio de teste: valida o canal sem precisar de um pedido real. */}
           <Box display="flex" flexDirection="column" gap="2">
@@ -392,6 +494,29 @@ function FlowRow({ flow }: { flow: Flow }) {
           <Button as="a" href={`/dashboard/flows/${flow.flowId}`}>
             <Icon source={<EditIcon size={16} />} color="currentColor" />
             Editar
+          </Button>
+        </Box>
+      </Card.Body>
+    </Card>
+  );
+}
+
+
+function DataRequestsCard() {
+  return (
+    <Card padding="none">
+      <Card.Body padding="base">
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap="4">
+          <Box display="flex" flexDirection="column" gap="1">
+            <Title as="h2" fontSize="3">
+              Privacidade - Solicitações de dados
+            </Title>
+            <Text color="neutral-textLow">
+              Consulte os relatórios de dados solicitados por clientes pelos canais oficiais da Nuvemshop.
+            </Text>
+          </Box>
+          <Button as="a" href="/dashboard/data-requests">
+            Ver solicitações
           </Button>
         </Box>
       </Card.Body>

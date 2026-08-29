@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase/admin";
 import { refreshBusinessToken } from "@/lib/whatsapp/embedded";
 import type { Store } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -38,30 +39,45 @@ export async function GET(req: NextRequest) {
     }
     try {
       const newToken = await refreshBusinessToken(wa.accessToken);
-      await doc.ref.update({
-        "whatsapp.accessToken": newToken, // TODO: criptografar em repouso
-        "whatsapp.tokenRefreshedAt": now,
-        // Sucesso: limpa qualquer falha anterior.
-        "whatsapp.lastRefreshError": null,
-        "whatsapp.refreshFailCount": 0,
+      const persisted = await db.runTransaction(async (tx) => {
+        const current = await tx.get(doc.ref);
+        if (!isStoreCommerciallyActive(current.data()?.status)) return false;
+        tx.update(doc.ref, {
+          "whatsapp.accessToken": newToken, // TODO: criptografar em repouso
+          "whatsapp.tokenRefreshedAt": now,
+          // Sucesso: limpa qualquer falha anterior.
+          "whatsapp.lastRefreshError": null,
+          "whatsapp.refreshFailCount": 0,
+        });
+        return true;
       });
-      refreshed++;
+      if (persisted) refreshed++;
+      else skipped++;
     } catch (err) {
       // Nao interrompe o lote, mas PERSISTE a falha na loja (visivel na UI e
       // consultavel) — antes ia so no JSON de resposta, que ninguem le.
       // Se falhar por ~30 dias seguidos, o token expira e o canal para: com
       // isto da para alertar/mostrar antes disso.
       const failCount = (wa.refreshFailCount ?? 0) + 1;
-      await doc.ref.update({
-        "whatsapp.lastRefreshError": String(err),
-        "whatsapp.lastRefreshAttempt": now,
-        "whatsapp.refreshFailCount": failCount,
+      const persisted = await db.runTransaction(async (tx) => {
+        const current = await tx.get(doc.ref);
+        if (!isStoreCommerciallyActive(current.data()?.status)) return false;
+        tx.update(doc.ref, {
+          "whatsapp.lastRefreshError": String(err),
+          "whatsapp.lastRefreshAttempt": now,
+          "whatsapp.refreshFailCount": failCount,
+        });
+        return true;
       });
-      errors.push(`${doc.id}: ${String(err)}`);
-      console.error(
-        `[refresh-whatsapp-tokens] falha na loja ${doc.id} (tentativa ${failCount}):`,
-        err,
-      );
+      if (persisted) {
+        errors.push(`${doc.id}: ${String(err)}`);
+        console.error(
+          `[refresh-whatsapp-tokens] falha na loja ${doc.id} (tentativa ${failCount}):`,
+          err,
+        );
+      } else {
+        skipped++;
+      }
     }
   }
 

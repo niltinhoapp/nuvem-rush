@@ -15,7 +15,7 @@ import "@xyflow/react/dist/style.css";
 import { Box, Input, Button, Text, Icon } from "@nimbus-ds/components";
 import { PlusCircleIcon, DisketteIcon, RocketIcon } from "@nimbus-ds/icons";
 import { nodeTypes } from "./nodes";
-import { flowToGraph, graphToFlow } from "@/lib/flows/serialize";
+import { flowToGraph, graphToFlow, removeStepNode, collectOrphanStepIds } from "@/lib/flows/serialize";
 import { sessionToken } from "@/lib/nexo";
 import type { Flow, Step, Trigger } from "@/types";
 
@@ -55,12 +55,15 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
     [setNodes],
   );
 
+  // Remove o step RELIGANDO a cadeia (A->B->C, remover B => A->C). Sem religar,
+  // os steps posteriores virariam orfaos e seriam descartados ao salvar (B1).
   const removeStep = useCallback(
     (id: string) => {
-      setNodes((ns) => ns.filter((n) => n.id !== id));
-      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+      const { nodes: nn, edges: ne } = removeStepNode(nodes, edges, id);
+      setNodes(nn);
+      setEdges(ne);
     },
-    [setNodes, setEdges],
+    [nodes, edges, setNodes, setEdges],
   );
 
   const addStep = useCallback(() => {
@@ -82,6 +85,10 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
     });
   }, [setNodes, setEdges]);
 
+  // Gatilho atual (fluxo linear: 1 trigger por fluxo) — repassado aos steps
+  // só para exibir qual template de WhatsApp cada ação enviaria.
+  const triggerEvent = (nodes.find((n) => n.type === "trigger")?.data.trigger as Trigger | undefined)?.event;
+
   // Reconstroi os data callbacks a cada render (closures atualizadas).
   const nodesWithHandlers = nodes.map((n) => {
     if (n.type === "trigger") {
@@ -97,6 +104,7 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
       ...n,
       data: {
         ...n.data,
+        triggerEvent,
         onChange: (s: Step) => patchNodeData(n.id, { step: s }),
         onRemove: () => removeStep(n.id),
       },
@@ -104,6 +112,16 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
   });
 
   async function save(status: Flow["status"]) {
+    // Validacao defensiva: nao salvar/ativar se houver acoes desconectadas do
+    // gatilho — elas seriam perdidas silenciosamente na serializacao (B1).
+    const orphans = collectOrphanStepIds(nodes, edges);
+    if (orphans.length > 0) {
+      setMsg(
+        `Há ${orphans.length} ação(ões) desconectada(s) do gatilho. ` +
+          "Reconecte todas as ações à cadeia antes de salvar.",
+      );
+      return;
+    }
     setSaving(true);
     setMsg("");
     try {
@@ -122,7 +140,13 @@ export default function FlowBuilder({ devStoreId, initialFlow }: Props) {
           steps,
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        if (res.status === 402) {
+          setMsg("Seu período grátis terminou. Assine o plano para ativar automações.");
+          return;
+        }
+        throw new Error("Não foi possível salvar o fluxo.");
+      }
       setMsg(status === "active" ? "Fluxo ativado!" : "Rascunho salvo.");
     } catch (e) {
       setMsg("Erro ao salvar: " + String(e));

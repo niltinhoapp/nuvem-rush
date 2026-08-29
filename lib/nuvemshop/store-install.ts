@@ -22,10 +22,19 @@ interface StoreInstallData {
   };
 }
 
+export interface ExistingStoreInstallState {
+  exists: boolean;
+  status?: unknown;
+}
+
+export function isFirstCommercialInstall(existing: ExistingStoreInstallState): boolean {
+  return !existing.exists || existing.status === "redacted";
+}
+
 export function buildStoreInstallData(
   storeId: string,
   token: StoreInstallToken,
-  storeExists: boolean,
+  existing: ExistingStoreInstallState,
   now: number = Date.now(),
 ): StoreInstallData {
   const renewableData: StoreInstallData = {
@@ -35,7 +44,7 @@ export function buildStoreInstallData(
     status: "active",
   };
 
-  if (storeExists) return renewableData;
+  if (!isFirstCommercialInstall(existing)) return renewableData;
 
   return {
     ...renewableData,

@@ -1,6 +1,7 @@
 // Persistencia de Flows no Firestore (servidor).
-import { col } from "@/lib/firebase/admin";
+import { db, col, storeRef } from "@/lib/firebase/admin";
 import type { Flow, Step, Trigger } from "@/types";
+import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 
 export async function listFlows(storeId: string): Promise<Flow[]> {
   const snap = await col(storeId, "flows").orderBy("createdAt", "desc").get();
@@ -26,18 +27,25 @@ export async function saveFlow(
     ? col(storeId, "flows").doc(input.flowId)
     : col(storeId, "flows").doc();
 
-  const existing = input.flowId ? (await ref.get()).data() : undefined;
-
-  const flow: Flow = {
-    flowId: ref.id,
-    name: input.name,
-    status: input.status,
-    trigger: input.trigger,
-    steps: input.steps,
-    stats: (existing?.stats as Flow["stats"]) ?? { enrolled: 0, sent: 0, failed: 0 },
-    createdAt: (existing?.createdAt as number) ?? Date.now(),
-  };
-
-  await ref.set(flow);
-  return flow;
+  return db.runTransaction(async (tx) => {
+    const [store, existingDoc] = await Promise.all([
+      tx.get(storeRef(storeId)),
+      tx.get(ref),
+    ]);
+    if (!isStoreCommerciallyActive(store.data()?.status)) {
+      throw new Error("store_inactive");
+    }
+    const existing = existingDoc.data();
+    const flow: Flow = {
+      flowId: ref.id,
+      name: input.name,
+      status: input.status,
+      trigger: input.trigger,
+      steps: input.steps,
+      stats: (existing?.stats as Flow["stats"]) ?? { enrolled: 0, sent: 0, failed: 0 },
+      createdAt: (existing?.createdAt as number) ?? Date.now(),
+    };
+    tx.set(ref, flow);
+    return flow;
+  });
 }
