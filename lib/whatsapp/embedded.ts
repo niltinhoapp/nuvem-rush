@@ -208,6 +208,7 @@ export type CatalogTemplateOperations = {
 export type CatalogTemplateProvisionOutcome = {
   outcome: "created" | "existing_status_confirmed" | "unconfirmed";
   template?: WhatsappCatalogTemplate;
+  failure?: "provider_error";
 };
 
 export type CatalogTemplateProvision = Record<
@@ -254,14 +255,22 @@ export async function provisionCatalogTemplates(
               },
             }
             : { outcome: "unconfirmed" };
-        } catch {
-          templates[key] = { outcome: "unconfirmed" };
+        } catch (error) {
+          console.warn("[whatsapp templates] existing template lookup failed", {
+            templateKey: key,
+            errorName: error instanceof Error ? error.name : "unknown",
+          });
+          templates[key] = { outcome: "unconfirmed", failure: "provider_error" };
         }
       } else {
         templates[key] = { outcome: "unconfirmed" };
       }
-    } catch {
-      templates[key] = { outcome: "unconfirmed" };
+    } catch (error) {
+      console.warn("[whatsapp templates] template provision failed", {
+        templateKey: key,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+      templates[key] = { outcome: "unconfirmed", failure: "provider_error" };
     }
   }
   return templates;

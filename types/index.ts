@@ -76,6 +76,13 @@ export interface StoreWhatsapp {
   templateStatusUpdatedAt?: number;
   // Catálogo fechado e aditivo. Instalações legadas permanecem sem migração.
   templates?: Partial<Record<TemplateCatalogKey, WhatsappCatalogTemplate>>;
+  // Reconciliação periódica com a Meta. Cinco minutos evitam uma chamada à
+  // Graph API em cada render sem deixar um webhook perdido preso por horas.
+  templatesLastReconciledAt?: number;
+  templateProvisionFailures?: Partial<Record<TemplateCatalogKey, {
+    failedAt: number;
+    reason: "provider_error";
+  }>>;
   connectedAt: number;
   // O token da config do Embedded Signup expira em 60 dias; o cron
   // /api/cron/refresh-whatsapp-tokens renova mensalmente via fb_exchange_token.

@@ -35,7 +35,8 @@ async function main() {
   // demo precisa existir antes do import para o teste nunca tocar credenciais.
   const { updateTemplateStatus } = await import("../lib/whatsapp/templateStatus.firestore");
   const { persistWhatsappConnection } = await import("../lib/whatsapp/connectPersistence");
-  const stores = ["ambiguous-a", "ambiguous-b", "tenant-a", "tenant-b", "stale-a", "parallel-a", "duplicate-a", "legacy-a", "inactive-a", "reconnect-p1", "reconnect-legacy", "reconnect-empty"];
+  const { reconcileStoreWhatsappTemplates } = await import("../lib/whatsapp/templateReconciliation");
+  const stores = ["ambiguous-a", "ambiguous-b", "tenant-a", "tenant-b", "stale-a", "parallel-a", "duplicate-a", "legacy-a", "inactive-a", "reconnect-p1", "reconnect-legacy", "reconnect-empty", "reconcile-a", "reconcile-failure", "reconcile-missing", "race-webhook", "race-reconcile", "later-status", "monotonic-at", "ttl-provision-failure"];
   for (const id of stores) await db.recursiveDelete(db.doc(`stores/${id}`));
   async function seed(id: string, wabaId: string, options: { status?: string; legacy?: boolean; updatedAt?: number } = {}) {
     const post = key("pos_venda_agradecimento");
@@ -159,7 +160,120 @@ async function main() {
   assert.equal(reconnectLegacy.templateName, key("pos_venda_agradecimento").name);
   assert.equal(reconnectLegacy.templateLang, "pt_BR");
   assert.equal(reconnectLegacy.templateStatus, "PENDING");
-  console.log("WhatsApp multi-template Firestore Emulator: 10/10 OK");
+
+  // 11/13: webhook perdido converge pelo snapshot confirmado da Meta.
+  await seed("reconcile-a", "waba-reconcile");
+  const allApproved = { found: templates("APPROVED", 0), missing: [] };
+  await reconcileStoreWhatsappTemplates({
+    storeId: "reconcile-a", force: true, now: 800,
+    fetchSnapshot: async () => allApproved,
+    createShipment: async () => { throw new Error("must_not_create"); },
+  });
+  assert.equal((await whatsapp("reconcile-a")).templates.carrinho_abandonado.status, "APPROVED");
+
+  // 12/13: indisponibilidade da Meta mantém integralmente o último estado.
+  await seed("reconcile-failure", "waba-reconcile-failure");
+  await db.doc("stores/reconcile-failure").update({ "whatsapp.templates.pos_venda_agradecimento.status": "APPROVED" });
+  const unavailable = await reconcileStoreWhatsappTemplates({
+    storeId: "reconcile-failure", force: true, now: 900,
+    fetchSnapshot: async () => { throw new Error("temporary"); },
+  });
+  assert.equal(unavailable.metaAvailable, false);
+  assert.equal((await whatsapp("reconcile-failure")).templates.pos_venda_agradecimento.status, "APPROVED");
+
+  // 13/13: uma ausência confirmada não remove nem altera as outras chaves.
+  await seed("reconcile-missing", "waba-reconcile-missing");
+  const partialSnapshot = {
+    found: {
+      pedido_pagamento_confirmado: { ...key("pedido_pagamento_confirmado"), status: "APPROVED" },
+      pedido_enviado_rastreio: { ...key("pedido_enviado_rastreio"), status: "APPROVED" },
+      pos_venda_agradecimento: { ...key("pos_venda_agradecimento"), status: "APPROVED" },
+    },
+    missing: ["carrinho_abandonado" as const],
+  };
+  await reconcileStoreWhatsappTemplates({
+    storeId: "reconcile-missing", force: true, now: 1_000,
+    fetchSnapshot: async () => partialSnapshot,
+    createShipment: async () => { throw new Error("must_not_create"); },
+  });
+  const reconciledMissing = await whatsapp("reconcile-missing");
+  assert.equal(reconciledMissing.templates.carrinho_abandonado.status, "PENDING");
+  assert.equal(reconciledMissing.templates.pedido_pagamento_confirmado.status, "APPROVED");
+
+  // 14/18: webhook ocorrido durante a chamada externa vence snapshot stale.
+  await seed("race-webhook", "waba-race-webhook");
+  const raceWebhook = await reconcileStoreWhatsappTemplates({
+    storeId: "race-webhook", force: true, now: 1_000,
+    fetchSnapshot: async () => ({ found: templates("PENDING", 0), missing: [] }),
+    createShipment: async () => { throw new Error("must_not_create"); },
+    beforePersist: async () => {
+      assert.equal(await updateTemplateStatus(event("waba-race-webhook", "APPROVED", 2, "pedido_pagamento_confirmado")), "updated");
+    },
+  });
+  assert.ok(raceWebhook.staleSnapshotIgnored?.includes("pedido_pagamento_confirmado"));
+  assert.equal((await whatsapp("race-webhook")).templates.pedido_pagamento_confirmado.status, "APPROVED");
+
+  // 15/18: resposta antiga que termina depois não sobrescreve reconciliação nova.
+  await seed("race-reconcile", "waba-race-reconcile");
+  let releaseOlder!: () => void;
+  let olderReady!: () => void;
+  const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+  const ready = new Promise<void>((resolve) => { olderReady = resolve; });
+  const older = reconcileStoreWhatsappTemplates({
+    storeId: "race-reconcile", force: true, now: 3_000,
+    fetchSnapshot: async () => ({ found: templates("PENDING", 0), missing: [] }),
+    createShipment: async () => { throw new Error("must_not_create"); },
+    beforePersist: async () => { olderReady(); await olderGate; },
+  });
+  await ready;
+  await reconcileStoreWhatsappTemplates({
+    storeId: "race-reconcile", force: true, now: 4_000,
+    fetchSnapshot: async () => ({ found: templates("APPROVED", 0), missing: [] }),
+    createShipment: async () => { throw new Error("must_not_create"); },
+  });
+  releaseOlder();
+  const olderResult = await older;
+  assert.ok(olderResult.staleSnapshotIgnored?.includes("pedido_pagamento_confirmado"));
+  assert.equal((await whatsapp("race-reconcile")).templates.pedido_pagamento_confirmado.status, "APPROVED");
+
+  // 16/18: APPROVED pode mudar legitimamente para PAUSED/DISABLED quando novo.
+  await seed("later-status", "waba-later-status");
+  await db.doc("stores/later-status").update({ "whatsapp.templates.pedido_enviado_rastreio.status": "APPROVED" });
+  assert.equal(await updateTemplateStatus(event("waba-later-status", "PAUSED", 5, "pedido_enviado_rastreio")), "updated");
+  assert.equal((await whatsapp("later-status")).templates.pedido_enviado_rastreio.status, "PAUSED");
+  assert.equal(await updateTemplateStatus(event("waba-later-status", "DISABLED", 6, "pedido_enviado_rastreio")), "updated");
+  assert.equal((await whatsapp("later-status")).templates.pedido_enviado_rastreio.status, "DISABLED");
+
+  // 17/18: reconciliação nunca reduz statusUpdatedAt, mesmo com relógio menor.
+  await seed("monotonic-at", "waba-monotonic-at", { updatedAt: 10_000 });
+  await reconcileStoreWhatsappTemplates({
+    storeId: "monotonic-at", force: true, now: 1_000,
+    fetchSnapshot: async () => ({ found: templates("REJECTED", 0), missing: [] }),
+    createShipment: async () => { throw new Error("must_not_create"); },
+  });
+  assert.equal((await whatsapp("monotonic-at")).templates.carrinho_abandonado.statusUpdatedAt, 10_001);
+
+  // 18/18: falha ao criar o quarto não avança TTL, mas persiste os outros três.
+  await seed("ttl-provision-failure", "waba-ttl-provision-failure");
+  const withoutShipment = {
+    found: {
+      carrinho_abandonado: { ...key("carrinho_abandonado"), status: "APPROVED" },
+      pedido_pagamento_confirmado: { ...key("pedido_pagamento_confirmado"), status: "APPROVED" },
+      pos_venda_agradecimento: { ...key("pos_venda_agradecimento"), status: "APPROVED" },
+    },
+    missing: ["pedido_enviado_rastreio" as const],
+  };
+  await reconcileStoreWhatsappTemplates({
+    storeId: "ttl-provision-failure", force: true, now: 11_000,
+    fetchSnapshot: async () => withoutShipment,
+    createShipment: async () => { throw new Error("temporary"); },
+  });
+  const ttlFailure = await whatsapp("ttl-provision-failure");
+  assert.equal(ttlFailure.templates.carrinho_abandonado.status, "APPROVED");
+  assert.equal(ttlFailure.templates.pedido_enviado_rastreio.status, "PENDING");
+  assert.equal(ttlFailure.templateProvisionFailures.pedido_enviado_rastreio.reason, "provider_error");
+  assert.equal(ttlFailure.templatesLastReconciledAt, undefined);
+  console.log("WhatsApp multi-template Firestore Emulator: 18/18 OK");
 }
 
 main().catch((error: unknown) => {

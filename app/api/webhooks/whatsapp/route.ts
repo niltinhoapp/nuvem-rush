@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
   // Assinatura invalida -> ignora (mas responde 200 para a Meta nao desativar
   // o webhook por erros repetidos).
   if (!verifySignature(raw, req.headers.get("x-hub-signature-256"))) {
+    console.warn("[whatsapp webhook] invalid signature");
     return NextResponse.json({ received: true });
   }
 
@@ -61,7 +62,18 @@ export async function POST(req: NextRequest) {
       for (const change of entry?.changes ?? []) {
         const templateUpdate = parseMetaTemplateStatusUpdate(entry, change);
         if (templateUpdate) {
-          await updateTemplateStatus(templateUpdate);
+          console.info("[whatsapp webhook] template status event received", {
+            wabaId: templateUpdate.wabaId,
+            templateName: templateUpdate.name,
+            language: templateUpdate.language,
+            status: templateUpdate.status,
+          });
+          const result = await updateTemplateStatus(templateUpdate);
+          console.info("[whatsapp webhook] template status event processed", {
+            wabaId: templateUpdate.wabaId,
+            templateName: templateUpdate.name,
+            result,
+          });
           continue;
         }
         const value = change?.value;
@@ -88,8 +100,10 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-  } catch {
-    // corpo invalido — ignora
+  } catch (error) {
+    console.error("[whatsapp webhook] processing failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
   }
 
   return NextResponse.json({ received: true });

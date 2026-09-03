@@ -26,6 +26,11 @@ import { isTransient } from "../lib/dispatch/retry";
 import type { TemplateCatalogKey } from "../lib/whatsapp/catalog";
 import type { WhatsappCatalogTemplate } from "../types";
 import type { CatalogTemplateProvision } from "../lib/whatsapp/embedded";
+import {
+  fetchCanonicalTemplateSnapshot,
+  provisionMissingShipmentTemplate,
+} from "../lib/whatsapp/templateReconciliationMeta";
+import { whatsappStatusPayload } from "../lib/whatsapp/templateStatusView";
 
 const keys = ["carrinho_abandonado", "pedido_pagamento_confirmado", "pedido_enviado_rastreio", "pos_venda_agradecimento"] as const;
 const approved = Object.fromEntries(keys.map((key) => [key, {
@@ -176,6 +181,134 @@ async function main() {
   assert.match(repository, /whatsapp\.templates/);
   assert.match(repository, /!whatsapp\.templates/);
   assert.equal(templateStatusLabel("APPROVED"), "Aprovado");
+
+  // Reconciliação: somente identidades canônicas exatas entram no snapshot.
+  const metaSnapshot = await fetchCanonicalTemplateSnapshot("waba", "secret", async () => new Response(JSON.stringify({ data: [
+    { name: "carrinho_abandonado", language: "pt_BR", status: "approved" },
+    { name: "pedido_pagamento_confirmado", language: "en_US", status: "APPROVED" },
+    { name: "estranho", language: "pt_BR", status: "APPROVED" },
+  ] }), { status: 200 }));
+  assert.equal(metaSnapshot.found.carrinho_abandonado?.status, "APPROVED");
+  assert.equal(metaSnapshot.found.pedido_pagamento_confirmado, undefined);
+  assert.ok(metaSnapshot.missing.includes("pedido_enviado_rastreio"));
+
+  // Paginação completa encontra templates canônicos em páginas posteriores,
+  // inclusive depois de mais de 250 registros.
+  let pageCalls = 0;
+  const fillers = Array.from({ length: 250 }, (_, index) => ({
+    name: `nao_canonico_${index}`, language: "pt_BR", status: "APPROVED",
+  }));
+  const pagedSnapshot = await fetchCanonicalTemplateSnapshot("waba", "secret", async () => {
+    pageCalls++;
+    return pageCalls === 1
+      ? new Response(JSON.stringify({ data: fillers, paging: { next: "https://graph.facebook.com/v22.0/waba/message_templates?after=250&access_token=leak" } }), { status: 200 })
+      : new Response(JSON.stringify({ data: [{ name: "pedido_enviado_rastreio", language: "pt_BR", status: "APPROVED" }] }), { status: 200 });
+  });
+  assert.equal(pageCalls, 2);
+  assert.equal(pagedSnapshot.found.pedido_enviado_rastreio?.status, "APPROVED");
+  let pagedShipmentCreates = 0;
+  await provisionMissingShipmentTemplate({
+    wabaId: "waba", accessToken: "secret", snapshot: pagedSnapshot, now: 200,
+    fetchSnapshot: async () => pagedSnapshot,
+    createShipment: async () => { pagedShipmentCreates++; return { created: true, alreadyExisted: false }; },
+  });
+  assert.equal(pagedShipmentCreates, 0);
+
+  // Uma página intermediária incompleta nunca produz uma lista de ausentes.
+  let failingPage = 0;
+  await assert.rejects(fetchCanonicalTemplateSnapshot("waba", "secret", async () => {
+    failingPage++;
+    return failingPage === 1
+      ? new Response(JSON.stringify({ data: [], paging: { next: "https://graph.facebook.com/v22.0/waba/message_templates?after=1" } }), { status: 200 })
+      : new Response(JSON.stringify({ error: { code: 2 } }), { status: 503 });
+  }), /meta_template_lookup_failed/);
+
+  await assert.rejects(fetchCanonicalTemplateSnapshot("waba", "secret", async () => new Response(JSON.stringify({
+    data: [], paging: { next: "https://attacker.example/templates" },
+  }), { status: 200 })), /meta_template_invalid_paging_url/);
+
+  const repeated = "https://graph.facebook.com/v22.0/waba/message_templates?after=same";
+  await assert.rejects(fetchCanonicalTemplateSnapshot("waba", "secret", async () => new Response(JSON.stringify({
+    data: [], paging: { next: repeated },
+  }), { status: 200 })), /meta_template_pagination_loop/);
+
+  // Template de envio presente: não há POST nem duplicata.
+  let shipmentCreates = 0;
+  const shipmentPresent = {
+    found: { pedido_enviado_rastreio: approved.pedido_enviado_rastreio },
+    missing: keys.filter((key) => key !== "pedido_enviado_rastreio"),
+  };
+  const presentResult = await provisionMissingShipmentTemplate({
+    wabaId: "waba", accessToken: "secret", snapshot: shipmentPresent, now: 200,
+    fetchSnapshot: async () => shipmentPresent,
+    createShipment: async () => { shipmentCreates++; return { created: true, alreadyExisted: false }; },
+  });
+  assert.equal(presentResult.created, false);
+  assert.equal(shipmentCreates, 0);
+
+  // Ausente confirmado: cria apenas o quarto e permanece PENDING.
+  const absentSnapshot = { found: {}, missing: [...keys] };
+  const createdShipment = await provisionMissingShipmentTemplate({
+    wabaId: "waba", accessToken: "secret", snapshot: absentSnapshot, now: 200,
+    fetchSnapshot: async () => absentSnapshot,
+    createShipment: async (_w, _t, template) => {
+      shipmentCreates++;
+      assert.equal(template.key, "pedido_enviado_rastreio");
+      return { created: true, alreadyExisted: false };
+    },
+  });
+  assert.equal(createdShipment.provision && createdShipment.provision !== "failed" ? createdShipment.provision.status : undefined, "PENDING");
+
+  // Corrida/already-exists: relê a Meta, não tenta criar novamente nem assume aprovação.
+  let refetches = 0;
+  const duplicateSafe = await provisionMissingShipmentTemplate({
+    wabaId: "waba", accessToken: "secret", snapshot: absentSnapshot, now: 200,
+    fetchSnapshot: async () => { refetches++; return shipmentPresent; },
+    createShipment: async () => ({ created: false, alreadyExisted: true }),
+  });
+  assert.equal(refetches, 1);
+  assert.equal(duplicateSafe.snapshot.found.pedido_enviado_rastreio?.status, "APPROVED");
+
+  // Dois refreshes que observaram ausência convergem por created/already exists.
+  let actuallyCreated = false;
+  let providerCreateCount = 0;
+  const concurrentCreate = async () => {
+    providerCreateCount++;
+    if (!actuallyCreated) {
+      actuallyCreated = true;
+      return { created: true, alreadyExisted: false };
+    }
+    return { created: false, alreadyExisted: true };
+  };
+  const [firstCreate, secondCreate] = await Promise.all([
+    provisionMissingShipmentTemplate({
+      wabaId: "waba", accessToken: "secret", snapshot: absentSnapshot, now: 300,
+      fetchSnapshot: async () => shipmentPresent, createShipment: concurrentCreate,
+    }),
+    provisionMissingShipmentTemplate({
+      wabaId: "waba", accessToken: "secret", snapshot: absentSnapshot, now: 301,
+      fetchSnapshot: async () => shipmentPresent, createShipment: concurrentCreate,
+    }),
+  ]);
+  assert.equal(providerCreateCount, 2);
+  assert.equal([firstCreate, secondCreate].filter((result) => result.created).length, 1);
+  assert.equal([firstCreate, secondCreate].filter((result) => result.snapshot.found.pedido_enviado_rastreio).length, 1);
+
+  // Falha do provider mantém o snapshot anterior e marca falha fail-closed.
+  const providerFailure = await provisionMissingShipmentTemplate({
+    wabaId: "waba", accessToken: "secret", snapshot: absentSnapshot, now: 200,
+    fetchSnapshot: async () => absentSnapshot,
+    createShipment: async () => { throw new Error("temporary"); },
+  });
+  assert.equal(providerFailure.snapshot, absentSnapshot);
+  assert.equal(providerFailure.provision, "failed");
+
+  // O payload consumido pelo dashboard reflete APPROVED reconciliado.
+  const dashboardPayload = whatsappStatusPayload({
+    wabaId: "waba", phoneNumberId: "phone", accessToken: "secret", status: "connected", connectedAt: 1,
+    templates: approved,
+  });
+  assert.equal(dashboardPayload.templates.pedido_pagamento_confirmado.status, "APPROVED");
   console.log("WhatsApp multi-template lifecycle: OK");
 }
 

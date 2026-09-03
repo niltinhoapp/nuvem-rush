@@ -1,4 +1,5 @@
 import { db, storeRef } from "@/lib/firebase/admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { isStoreCommerciallyActive } from "@/lib/lifecycle/status";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS, type TemplateCatalogKey } from "./catalog";
 import { mergeConfirmedCatalogTemplates } from "./connectMerge";
@@ -38,6 +39,12 @@ export async function persistWhatsappConnection(params: {
         const outcome = params.provision[key];
         if (outcome.template && outcome.outcome !== "unconfirmed") {
           updates[`whatsapp.templates.${key}`] = outcome.template;
+          updates[`whatsapp.templateProvisionFailures.${key}`] = FieldValue.delete();
+        } else if (outcome.failure) {
+          updates[`whatsapp.templateProvisionFailures.${key}`] = {
+            failedAt: now,
+            reason: outcome.failure,
+          };
         }
       }
     }

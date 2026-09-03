@@ -16,27 +16,24 @@ import {
 } from "@/lib/whatsapp/embedded";
 import { WHATSAPP_TEMPLATE_CATALOG_KEYS } from "@/lib/whatsapp/catalog";
 import { persistWhatsappConnection } from "@/lib/whatsapp/connectPersistence";
-import { storedCatalogTemplate } from "@/lib/whatsapp/templateStatus";
+import { reconcileStoreWhatsappTemplates } from "@/lib/whatsapp/templateReconciliation";
+import { whatsappStatusPayload } from "@/lib/whatsapp/templateStatusView";
 import type { Store } from "@/types";
 
 export async function GET(req: NextRequest) {
   const storeId = resolveStoreId(req);
   if (!storeId) return NextResponse.json({ error: "loja nao identificada" }, { status: 401 });
 
+  // Best effort com TTL: falha da Meta nunca apaga nem promove o snapshot.
+  await reconcileStoreWhatsappTemplates({ storeId }).catch((error) => {
+    console.error("[whatsapp templates] automatic reconciliation failed", {
+      storeId,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  });
   const store = (await storeRef(storeId).get()).data() as Store | undefined;
-  const wa = store?.whatsapp;
-  return NextResponse.json({
-    connected: wa?.status === "connected",
-    phoneNumberId: wa?.phoneNumberId ?? null,
-    templates: Object.fromEntries(WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
-      const template = storedCatalogTemplate(wa, key);
-      return [key, template ? {
-        name: template.name,
-        language: template.language,
-        status: template.status,
-        statusUpdatedAt: template.statusUpdatedAt ?? null,
-      } : null];
-    })),
+  return NextResponse.json(whatsappStatusPayload(store?.whatsapp), {
+    headers: { "Cache-Control": "private, no-store" },
   });
 }
 

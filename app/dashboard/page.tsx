@@ -54,13 +54,14 @@ export default function DashboardPage() {
   const [wa, setWa] = useState<{
     connected: boolean;
     phoneNumberId: string | null;
-    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
+    templates: Partial<Record<TemplateCatalogKey, { name: string | null; language: string | null; status: string | null; state?: string }>>;
   } | null>(null);
   const [testState, setTestState] = useState<{ sending: boolean; msg: string }>({
     sending: false,
     msg: "",
   });
   const [billing, setBilling] = useState<{ state: CommercialState } | null>(null);
+  const [waRefreshing, setWaRefreshing] = useState(false);
   // So existe no cliente: getNexo() usa `window` por baixo, e nao pode ser
   // chamado durante o prerender/SSR da pagina (mesmo com "use client").
   const [nexo, setNexo] = useState<ReturnType<typeof getNexo> | null>(null);
@@ -104,6 +105,28 @@ export default function DashboardPage() {
         });
       })
       .catch((e) => console.error("Falha ao checar status do WhatsApp:", e));
+  };
+
+  const refreshWhatsappStatus = async () => {
+    setWaRefreshing(true);
+    try {
+      const token = await sessionToken();
+      const r = await fetch("/api/whatsapp/templates/sync", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const data = await r.json();
+      setWa({
+        connected: !!data.connected,
+        phoneNumberId: data.phoneNumberId ?? null,
+        templates: data.templates && typeof data.templates === "object" ? data.templates : {},
+      });
+    } catch (e) {
+      console.error("Falha ao atualizar templates do WhatsApp:", e);
+    } finally {
+      setWaRefreshing(false);
+    }
   };
 
   // Abre /connect-whatsapp em nova aba (popups da Meta nao funcionam bem
@@ -161,7 +184,8 @@ export default function DashboardPage() {
         <WhatsappStatusCard
           wa={wa}
           onConnect={openConnectWhatsapp}
-          onRefresh={loadWhatsappStatus}
+          onRefresh={refreshWhatsappStatus}
+          refreshing={waRefreshing}
           onTest={sendTest}
           testState={testState}
         />
@@ -286,16 +310,18 @@ function WhatsappStatusCard({
   onRefresh,
   onTest,
   testState,
+  refreshing,
 }: {
   wa: {
     connected: boolean;
     phoneNumberId: string | null;
-    templates: Partial<Record<TemplateCatalogKey, { name: string; language: string; status: string }>>;
+    templates: Partial<Record<TemplateCatalogKey, { name: string | null; language: string | null; status: string | null; state?: string }>>;
   } | null;
   onConnect: () => void;
   onRefresh: () => void;
   onTest: (to: string) => void;
   testState: { sending: boolean; msg: string };
+  refreshing: boolean;
 }) {
   const [testTo, setTestTo] = useState("");
   const connected = !!wa?.connected;
@@ -322,7 +348,12 @@ function WhatsappStatusCard({
               </Box>
             </Box>
             {connected ? (
-              <Tag appearance="success">Conectado</Tag>
+              <Box display="flex" gap="2" alignItems="center">
+                <Button onClick={onRefresh} disabled={refreshing}>
+                  {refreshing ? "Atualizando..." : "Atualizar status"}
+                </Button>
+                <Tag appearance="success">Conectado</Tag>
+              </Box>
             ) : (
               <Box display="flex" gap="2">
                 <Button onClick={onRefresh}>Atualizar</Button>
@@ -337,10 +368,16 @@ function WhatsappStatusCard({
             <Box display="flex" flexDirection="column" gap="1">
               {WHATSAPP_TEMPLATE_CATALOG_KEYS.map((key) => {
                 const catalog = getCatalogTemplate(key);
-                const status = wa?.templates[key]?.status;
+                const template = wa?.templates[key];
+                const status = template?.status ?? undefined;
+                const label = template?.state === "PROVISION_FAILED"
+                  ? "Falha ao criar"
+                  : template?.state === "ABSENT"
+                    ? "Ausente"
+                    : templateStatusLabel(status);
                 return (
                   <Text key={key} fontSize="caption" color="neutral-textLow">
-                    {catalog.label}: {templateStatusLabel(status)}
+                    {catalog.label}: {label}
                   </Text>
                 );
               })}
